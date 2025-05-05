@@ -1,0 +1,90 @@
+Ndërto një aplikacion mobil edukativ për adoleshentë (mosha 12–17 vjeç), me qëllim edukimin financiar përmes lojërave dhe simulimeve interaktive. Koncepti i aplikacionit është kombinim mes Duolingo (mësim me nivele) dhe Monopoly (loja me prona dhe qytet virtual).
+
+Kërkoj që ta ndërtosh këtë aplikacion në React Native për t’u përdorur si në Android ashtu edhe në iOS. Përdor Firebase për autentikim, ruajtje të të dhënave, dhe funksionalitete backend. Struktura e aplikacionit duhet të jetë si më poshtë:
+1. Struktura e përgjithshme e aplikacionit:
+
+    HomeScreen: përshëndetje, progres i përdoruesit, akses te nivelet dhe qyteti.
+
+    LessonScreen: mësime të stilit Duolingo (tekst + pyetje + feedback).
+
+    GameScreen: mini-lojëra edukative për vendimmarrje financiare.
+
+    CityMapScreen: qyteti interaktiv ku çdo ndërtesë përfaqëson një temë financiare (buxhet, pagesa, kredi, etj.).
+
+    ProfileScreen: XP, coins, badges, dhe avatari i përdoruesit.
+
+    ShopScreen: blej prona, avatarë, ose përmirësime me monedha virtuale.
+
+2. Funksionalitete kryesore që kërkoj të implementosh:
+
+    Firebase Auth për regjistrim/login me email apo nickname.
+
+    Firestore për ruajtjen e progresit të përdoruesit (XP, nivele, pronat e blera).
+
+    Sistem i gamification:
+
+        XP për çdo mësim të përfunduar.
+
+        Coins të fituara nga mësime apo lojëra.
+
+        Badges për përfundimin e temave.
+
+        Prona të blera në qytet që japin bonuse ditore.
+
+    Quiz interaktiv me 3-4 pyetje për çdo mësim.
+
+    Mini-games si: “vendos prioritetet për të shpenzuar 50€”, “përballu me një shpenzim të papritur”, “kupto dallimin mes një karte debiti dhe krediti”.
+
+3. Temat kryesore (mësime):
+
+    Planifikimi dhe buxhetimi
+
+    Kursimi
+
+    Pagesat dhe kartat bankare
+
+    Jetesa (ushqim, qira, transport)
+
+    Investimet dhe interesat
+
+    Kreditë dhe rreziqet
+
+    Mashtrimet financiare online
+
+4. Kërkesa të UI/UX:
+
+    Dizajn për adoleshentë: ilustrime të thjeshta, ngjyra tërheqëse, animacione të lehta.
+
+    “City Map” me ndërtesa të klikueshme, secila hap një temë.
+
+    Progress bar në mësime.
+
+    Avatar i personalizueshëm (emër, pamje, rroba).
+
+5. Teknologjitë që dua të përdorësh:
+
+    React Native + Expo
+
+    Firebase për auth, firestore, storage, messaging
+
+    React Navigation për lëvizje mes ekraneve
+
+    Redux/Context API për menaxhim gjendjeje (XP, coins, user info)
+
+    AsyncStorage për cache lokalisht
+
+6. Kërkesa për MVP (Minimum Viable Product):
+
+    Një skedar App.js me navigim bazë
+
+    Regjistrim/Login për përdoruesit
+
+    Një mësim funksional (me quiz dhe XP)
+
+    Një ndërtesë në city map (p.sh. banka që hap temën “pagesat”)
+
+    Shop i thjeshtë për të blerë një pronë me coins
+
+    Rritje XP dhe përditësim në Firestore
+
+Shkruaj kodin fillestar për këtë MVP. Fillimisht krijo strukturën me foldera, pastaj fillo me Auth dhe navigim bazik (Home, Lesson, CityMap).
