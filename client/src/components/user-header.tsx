@@ -1,11 +1,11 @@
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "wouter";
+import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 
 export default function UserHeader() {
   const { user } = useAuth();
-  const [, navigate] = useLocation();
+  const navigate = useNavigate();
   
   // Get notification count
   const { data: notifications } = useQuery<any[]>({

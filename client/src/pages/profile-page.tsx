@@ -4,7 +4,7 @@ import { Progress } from "@/components/ui/progress";
 import { User } from "@shared/schema";
 import { getQueryFn, apiRequest, queryClient } from "@/lib/queryClient";
 import { toast } from "@/hooks/use-toast";
-import { Link } from "wouter";
+import { Link } from "react-router-dom";
 
 interface Achievement {
   id: number;
@@ -143,10 +143,10 @@ export default function ProfilePage() {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-bold">Your Profile</h2>
             <div className="flex items-center">
-              <Link href="/notifications" className="w-8 h-8 flex items-center justify-center">
+              <Link to="/notifications" className="w-8 h-8 flex items-center justify-center">
                 <i className="ri-notification-3-line text-dark/70"></i>
               </Link>
-              <Link href="/settings" className="w-8 h-8 flex items-center justify-center">
+              <Link to="/settings" className="w-8 h-8 flex items-center justify-center">
                 <i className="ri-settings-3-line text-dark/70"></i>
               </Link>
               <button className="w-8 h-8 flex items-center justify-center" onClick={() => logoutMutation.mutate()}>

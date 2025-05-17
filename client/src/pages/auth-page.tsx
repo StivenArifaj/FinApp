@@ -8,9 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/hooks/use-toast";
 import { insertUserSchema, UserWithProfile } from "@shared/schema";
-import { useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useLocation } from "wouter";
+import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Eye, EyeOff, User, Lock, Mail, AlertCircle, ExternalLink, CheckCircle2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -47,13 +45,13 @@ export default function AuthPage() {
   const [activeTab, setActiveTab] = useState<string>("login");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [, navigate] = useLocation();
+  const navigate = useNavigate();
   const { user } = useAuth();
   
   // Redirect if already logged in
   useEffect(() => {
     if (user) {
-      navigate("/home-page.tsx");
+      navigate("/");
     }
   }, [user, navigate]);
 
@@ -112,41 +110,33 @@ export default function AuthPage() {
   };
 
   // Login mutation
-  const loginMutation = useMutation({
-    mutationFn: async (credentials: LoginValues) => {
-      const res = await apiRequest("POST", "/api/login", {
-        username: credentials.identifier,
-        password: credentials.password
+  const loginMutation = async (credentials: LoginValues) => {
+    try {
+      const res = await fetch("/api/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: credentials.identifier,
+          password: credentials.password
+        }),
+        credentials: "include"
       });
       
       if (!res.ok) {
-        throw new Error(await res.text());
+        const errorText = await res.text();
+        throw new Error(errorText || "Login failed");
       }
       
-      const user = await res.json();
-      return user;
-    },
-    onSuccess: (user: UserWithProfile) => {
-      queryClient.setQueryData(["/api/user"], user);
-      toast({
-        title: "Login successful",
-        description: `Welcome back, ${user.username}!`,
-        variant: "default",
-      });
-      navigate("/");
-    },
-    onError: (error: Error) => {
-      toast({
-        title: "Login failed",
-        description: error.message || "Invalid username or password",
-        variant: "destructive",
-      });
-    },
-  });
+      return await res.json();
+    } catch (error) {
+      console.error("Login error:", error);
+      throw error;
+    }
+  };
 
   // Register mutation
-  const registerMutation = useMutation({
-    mutationFn: async (userData: RegisterValues) => {
+  const registerMutation = async (userData: RegisterValues) => {
+    try {
       // Only send the fields that the backend expects
       const payload = {
         username: userData.username,
@@ -155,26 +145,25 @@ export default function AuthPage() {
         firstName: userData.firstName,
         lastName: userData.lastName,
       };
-      const res = await apiRequest("POST", "/api/register", payload);
+      
+      const res = await fetch("/api/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        credentials: "include"
+      });
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(errorText || "Registration failed");
+      }
+      
       return await res.json();
-    },
-    onSuccess: (user: UserWithProfile) => {
-      queryClient.setQueryData(["/api/user"], user);
-      toast({
-        title: "Registration successful",
-        description: "Your account has been created! Welcome to FinCity.",
-        variant: "default",
-      });
-      navigate("/");
-    },
-    onError: (error: Error) => {
-      toast({
-        title: "Registration failed",
-        description: error.message || "Could not create your account. Please try again.",
-        variant: "destructive",
-      });
-    },
-  });
+    } catch (error) {
+      console.error("Registration error:", error);
+      throw error;
+    }
+  };
 
   // Login form
   const loginForm = useForm<LoginValues>({
@@ -208,12 +197,40 @@ export default function AuthPage() {
   }, [watchedPassword]);
 
   // Form submission handlers
-  const onLoginSubmit = (values: LoginValues) => {
-    loginMutation.mutate(values);
+  const onLoginSubmit = async (values: LoginValues) => {
+    try {
+      const user = await loginMutation(values);
+      toast({
+        title: "Login successful",
+        description: `Welcome back, ${user.username}!`,
+        variant: "default",
+      });
+      window.location.href = "/";
+    } catch (error) {
+      toast({
+        title: "Login failed",
+        description: error.message || "Invalid username or password",
+        variant: "destructive",
+      });
+    }
   };
 
-  const onRegisterSubmit = (values: RegisterValues) => {
-    registerMutation.mutate(values);
+  const onRegisterSubmit = async (values: RegisterValues) => {
+    try {
+      const user = await registerMutation(values);
+      toast({
+        title: "Registration successful",
+        description: "Your account has been created! Welcome to FinCity.",
+        variant: "default",
+      });
+      window.location.href = "/";
+    } catch (error) {
+      toast({
+        title: "Registration failed",
+        description: error.message || "Could not create your account. Please try again.",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -346,54 +363,25 @@ export default function AuthPage() {
                     <Button 
                       type="submit"
                       className="w-full bg-primary hover:bg-primary/90"
-                      disabled={loginMutation.isPending}
                     >
-                      {loginMutation.isPending ? "Logging in..." : "Log In"}
+                      Log In
                     </Button>
                   </form>
                 </Form>
                 
-                {loginMutation.isError && (
-                  <div className="mt-4 p-3 bg-red-50 text-red-700 rounded-md flex items-start">
-                    <AlertCircle size={16} className="mr-2 mt-0.5 flex-shrink-0" />
-                    <p className="text-sm">{loginMutation.error?.message || "Invalid username or password"}</p>
-                  </div>
-                )}
-                
-                <div className="relative my-6">
-                  <div className="absolute inset-0 flex items-center">
-                    <Separator />
-                  </div>
-                  <div className="relative flex justify-center">
-                    <span className="bg-white px-2 text-xs text-gray-500">OR</span>
-                  </div>
-                </div>
-                
-                <div className="space-y-3">
-                  <Button variant="outline" className="w-full" onClick={() => {
-                    toast({
-                      title: "Social Login",
-                      description: "This feature will be implemented soon!",
-                    });
-                  }}>
-                    <img src="https://cdn.jsdelivr.net/gh/devicons/devicon/icons/google/google-original.svg" className="w-4 h-4 mr-2" />
-                    Continue with Google
-                  </Button>
+                <div className="text-center">
+                  <p className="text-sm text-gray-600">
+                    Don't have an account?{" "}
+                    <button 
+                      type="button" 
+                      className="text-primary font-medium"
+                      onClick={() => setActiveTab("register")}
+                    >
+                      Sign up
+                    </button>
+                  </p>
                 </div>
               </motion.div>
-              
-              <div className="text-center">
-                <p className="text-sm text-gray-600">
-                  Don't have an account?{" "}
-                  <button 
-                    type="button" 
-                    className="text-primary font-medium"
-                    onClick={() => setActiveTab("register")}
-                  >
-                    Sign up
-                  </button>
-                </p>
-              </div>
             </TabsContent>
             
             <TabsContent value="register">
@@ -629,52 +617,27 @@ export default function AuthPage() {
                     <Button 
                       type="submit"
                       className="w-full bg-primary hover:bg-primary/90"
-                      disabled={registerMutation.isPending}
                     >
-                      {registerMutation.isPending ? "Creating account..." : "Create Account"}
+                      Create Account
                     </Button>
                   </form>
                 </Form>
                 
-                {registerMutation.isError && (
-                  <div className="mt-4 p-3 bg-red-50 text-red-700 rounded-md flex items-start">
-                    <AlertCircle size={16} className="mr-2 mt-0.5 flex-shrink-0" />
-                    <p className="text-sm">{registerMutation.error?.message || "Could not create your account. Please try again."}</p>
-                  </div>
-                )}
+                <div className="text-center">
+                  <p className="text-sm text-gray-600">
+                    Already have an account?{" "}
+                    <button 
+                      type="button" 
+                      className="text-primary font-medium"
+                      onClick={() => setActiveTab("login")}
+                    >
+                      Log in
+                    </button>
+                  </p>
+                </div>
               </motion.div>
-              
-              <div className="text-center">
-                <p className="text-sm text-gray-600">
-                  Already have an account?{" "}
-                  <button 
-                    type="button" 
-                    className="text-primary font-medium"
-                    onClick={() => setActiveTab("login")}
-                  >
-                    Log in
-                  </button>
-                </p>
-              </div>
             </TabsContent>
           </Tabs>
-          
-          {/* Demo account information */}
-          <motion.div 
-            className="mt-6 p-4 bg-blue-50 rounded-lg text-sm text-blue-800 border border-blue-200"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.3 }}
-          >
-            <div className="flex items-start">
-              <CheckCircle2 size={20} className="mr-2 text-blue-600 flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="font-semibold">Demo Account:</p>
-                <p className="mt-1">Username: <span className="font-mono bg-blue-100 px-1 py-0.5 rounded">demo</span></p>
-                <p>Password: <span className="font-mono bg-blue-100 px-1 py-0.5 rounded">password</span></p>
-              </div>
-            </div>
-          </motion.div>
         </div>
       </div>
       
@@ -745,7 +708,7 @@ export default function AuthPage() {
                 transition={{ duration: 0.5, delay: 1 }}
               >
                 <div className="bg-white/20 p-3 rounded-full mr-4">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide"><path d="M12.22 2h-.44a2.5 2.5 0 0 0-2 2v.18a2.5 2.5 0 0 1-1 1.73l-.43.25a2.5 2.5 0 0 1-2 0l-.15-.08a2.5 2.5 0 0 0-2.73.73l-.22.38a2.5 2.5 0 0 0 .73 2.73l.15.1a2.5 2.5 0 0 1 1 1.72v.51a2.5 2.5 0 0 1-1 1.74l-.15.09a2.5 2.5 0 0 0-.73 2.73l.22.38a2.5 2.5 0 0 0 2.73.73l.15-.08a2.5 2.5 0 0 1 2 0l.43.25a2.5 2.5 0 0 1 1 1.73V20a2.5 2.5 0 0 0 2 2h.44a2.5 2.5 0 0 0 2-2v-.18a2.5 2.5 0 0 1 1-1.73l.43-.25a2.5 2.5 0 0 1 2 0l.15.08a2.5 2.5 0 0 0 2.73-.73l.22-.39a2.5 2.5 0 0 0-.73-2.73l-.15-.08a2.5 2.5 0 0 1-1-1.74v-.5a2.5 2.5 0 0 1 1-1.74l.15-.09a2.5 2.5 0 0 0 .73-2.73l-.22-.38a2.5 2.5 0 0 0-2.73-.73l-.15.08a2.5 2.5 0 0 1-2 0l-.43-.25a2.5 2.5 0 0 1-1-1.73V4a2.5 2.5 0 0 0-2-2z" /><circle cx="12" cy="12" r="3" /></svg>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide"><path d="M12.22 2h-.44a2.5 2.5 0 0 1 0-5H12" /><path d="M18 2h1.5a2.5 2.5 0 0 0 0-5H18" /><path d="M4 22h16" /><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22" /><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22" /><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z" /></svg>
                 </div>
                 <div>
                   <h3 className="text-lg font-semibold">Build Your Virtual City</h3>

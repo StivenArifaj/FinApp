@@ -1,5 +1,5 @@
 import { Progress } from "@/components/ui/progress";
-import { Link } from "wouter";
+import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 
 interface LessonProps {
@@ -15,9 +15,9 @@ interface LessonProps {
 
 export default function LessonCard({ lesson }: LessonProps) {
   return (
-    <Link href={`/lesson/${lesson.id}`}>
-      <motion.a 
-        className="block bg-white rounded-xl shadow-sm p-4 mb-3 border border-transparent transition-all"
+    <Link to={`/lesson/${lesson.id}`} className="block">
+      <motion.div 
+        className="bg-white rounded-xl shadow-sm p-4 mb-3 border border-transparent transition-all"
         whileHover={{ 
           scale: 1.02,
           boxShadow: "0 4px 12px rgba(0,0,0,0.05)",
@@ -94,7 +94,7 @@ export default function LessonCard({ lesson }: LessonProps) {
             </div>
           </div>
         </div>
-      </motion.a>
+      </motion.div>
     </Link>
   );
 }

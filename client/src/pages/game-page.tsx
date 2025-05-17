@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useLocation } from "wouter";
+import { useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
 import { getQueryFn } from "@/lib/queryClient";
@@ -19,7 +19,7 @@ export default function GamePage() {
     queryKey: ["/api/user"],
     queryFn: getQueryFn({ on401: "returnNull" }) 
   });
-  const [, setLocation] = useLocation();
+  const navigate = useNavigate();
   const [items, setItems] = useState<SpendingItem[]>([
     { id: 1, name: "Food for the week", icon: "ri-restaurant-fill", cost: 25 },
     { id: 2, name: "Movie tickets", icon: "ri-movie-fill", cost: 15 },
@@ -83,7 +83,7 @@ export default function GamePage() {
   const handleSubmit = () => {
     // In a real app, this would submit the priorities to the backend
     // and navigate to a results page
-    setLocation("/");
+    navigate("/");
   };
 
   return (
@@ -93,7 +93,7 @@ export default function GamePage() {
         <div className="flex items-center justify-between mb-3">
           <button 
             className="w-8 h-8 flex items-center justify-center"
-            onClick={() => setLocation("/")}
+            onClick={() => navigate("/")}
           >
             <i className="ri-arrow-left-line text-dark/70"></i>
           </button>

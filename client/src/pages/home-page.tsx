@@ -3,7 +3,7 @@ import BottomNav from "@/components/bottom-nav";
 import UserHeader from "@/components/user-header";
 import LessonCard from "@/components/lesson-card";
 import AchievementCard from "@/components/achievement-card";
-import { Link } from "wouter";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Progress } from "@/components/ui/progress";
 
@@ -73,7 +73,7 @@ export default function HomePage() {
           <div className="mb-6">
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold">Continue Learning</h3>
-              <Link href="/lessons" className="text-primary text-sm">View all</Link>
+              <Link to="/lessons" className="text-primary text-sm">View all</Link>
             </div>
             
             {lessons && lessons.length > 0 ? (
@@ -135,7 +135,7 @@ export default function HomePage() {
                       <i className="ri-coin-line text-yellow-300 mr-1"></i> 35 coins
                     </span>
                   </div>
-                  <Link href="/city-map" className="bg-white text-blue-600 px-4 py-2 rounded-lg text-sm font-bold shadow-sm inline-flex items-center justify-center w-full transition-transform hover:scale-[1.02] active:scale-[0.98]">
+                  <Link to="/city-map" className="bg-white text-blue-600 px-4 py-2 rounded-lg text-sm font-bold shadow-sm inline-flex items-center justify-center w-full transition-transform hover:scale-[1.02] active:scale-[0.98]">
                     <i className="ri-building-4-line mr-2"></i>
                     Visit Your City
                   </Link>
@@ -152,7 +152,7 @@ export default function HomePage() {
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="font-bold">Your Achievements</h3>
-              <Link href="/profile" className="text-primary text-sm">All badges</Link>
+              <Link to="/profile" className="text-primary text-sm">All badges</Link>
             </div>
             
             <div className="flex space-x-3 mb-3">

@@ -31,6 +31,12 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     const res = await fetch(queryKey[0] as string, {
       credentials: "include",
+      cache: "no-store", // Ensure we don't use browser cache
+      headers: {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0"
+      }
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
@@ -41,15 +47,18 @@ export const getQueryFn: <T>(options: {
     return await res.json();
   };
 
+// Create a new QueryClient instance with optimized settings
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
-      refetchOnWindowFocus: true, // Enable refetching on window focus
-      staleTime: 1000 * 60 * 5, // 5 minutes
-      retry: 1, // Retry once on failure
-      refetchOnMount: true, // Refetch on component mount
+      refetchOnWindowFocus: true,
+      staleTime: 0, // Don't cache data
+      gcTime: 1000 * 60 * 5, // Keep in cache for 5 minutes (renamed from cacheTime)
+      retry: 1,
+      refetchOnMount: "always", // Always refetch on component mount
+      refetchOnReconnect: true,
     },
     mutations: {
       retry: false,

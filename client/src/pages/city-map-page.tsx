@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import BuildingCard from "@/components/building-card";
-import { Link } from "wouter";
+import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 
 interface Building {
@@ -489,7 +489,7 @@ export default function CityMapPage() {
               
               {/* Add Building Button */}
               <div className="absolute bottom-4 right-4 flex flex-col items-center">
-                <Link href="/shop" className="bg-primary text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center mb-2">
+                <Link to="/shop" className="bg-primary text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center mb-2">
                   <i className="ri-add-line text-xl"></i>
                 </Link>
                 <motion.button 
@@ -536,7 +536,7 @@ export default function CityMapPage() {
                     </span>
                   </div>
                   {selectedBuilding.owned ? (
-                    <Link href={`/lesson/${selectedBuilding.id}`} className="bg-primary text-white px-4 py-2 rounded-lg text-sm">Start Lesson</Link>
+                    <Link to={`/lesson/${selectedBuilding.id}`} className="bg-primary text-white px-4 py-2 rounded-lg text-sm">Start Lesson</Link>
                   ) : (
                     <Button className="bg-secondary text-white px-4 py-2 rounded-lg text-sm">Buy for 250 coins</Button>
                   )}

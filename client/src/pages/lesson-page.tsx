@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useLocation } from "wouter";
+import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { UserWithProfile } from "@shared/schema";
 import { getQueryFn, apiRequest, queryClient } from "@/lib/queryClient";
@@ -35,7 +35,7 @@ export default function LessonPage() {
     queryKey: ["/api/user"],
     queryFn: getQueryFn({ on401: "returnNull" }) 
   });
-  const [, setLocation] = useLocation();
+  const navigate = useNavigate();
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
   const [showResult, setShowResult] = useState(false);
   const [isCorrect, setIsCorrect] = useState(false);
@@ -88,7 +88,7 @@ export default function LessonPage() {
 
   const handleContinue = () => {
     // In a real app, this would advance to the next question or complete the lesson
-    setLocation("/");
+    navigate("/");
   };
 
   return (
@@ -98,7 +98,7 @@ export default function LessonPage() {
         <div className="flex items-center justify-between mb-3">
           <button 
             className="w-8 h-8 flex items-center justify-center"
-            onClick={() => setLocation("/")}
+            onClick={() => navigate("/")}
           >
             <i className="ri-arrow-left-line text-dark/70"></i>
           </button>
