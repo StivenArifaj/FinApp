@@ -1,181 +1,92 @@
 import { createContext, ReactNode, useContext, useEffect, useState } from "react";
-import {
-  useQuery,
-  useMutation,
-  UseMutationResult,
-  useQueryClient,
-} from "@tanstack/react-query";
-import { insertUserSchema, UserWithProfile, InsertUser } from "@shared/schema";
-import { apiRequest } from "../lib/queryClient";
+// Remove React Query and API related imports
+// import { useQuery, useMutation, UseMutationResult, useQueryClient } from "@tanstack/react-query";
+// import { insertUserSchema, UserWithProfile, InsertUser } from "@shared/schema";
+// import { apiRequest } from "../lib/queryClient";
+
 import { useNavigate, useLocation } from "react-router-dom";
 
 // Using direct toast function, not hook
 import { toast } from "@/hooks/use-toast";
 
+// Import Firebase Auth
+import { getAuth, onAuthStateChanged, User, signOut } from "firebase/auth";
+import { app } from "../firebaseConfig"; // Import the initialized Firebase app
+
+// Get Auth instance
+const auth = getAuth(app);
+
+// Define the shape of the authentication context
 type AuthContextType = {
-  user: UserWithProfile | null;
-  isLoading: boolean;
-  error: Error | null;
-  loginMutation: UseMutationResult<UserWithProfile, Error, LoginData>;
-  logoutMutation: UseMutationResult<void, Error, void>;
-  registerMutation: UseMutationResult<UserWithProfile, Error, InsertUser>;
-  refetchUser: () => void;
+  user: User | null; // Firebase Auth User object
+  isLoading: boolean; // Loading state while checking initial auth status
+  // Remove mutation results from context as they are handled in auth-page
+  // loginMutation: UseMutationResult<UserWithProfile, Error, LoginData>;
+  // registerMutation: UseMutationResult<UserWithProfile, Error, InsertUser>;
+  logout: () => Promise<void>; // Function to log out
 };
 
-type LoginData = Pick<InsertUser, "username" | "password">;
+// type LoginData = Pick<InsertUser, "username" | "password">; // No longer needed in hook
 
 export const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true); // Add loading state
   const navigate = useNavigate();
   const location = useLocation();
-  const queryClient = useQueryClient();
-  const [forceRefresh, setForceRefresh] = useState(0);
 
-  // Query for user data
-  const {
-    data: user,
-    error,
-    isLoading,
-    refetch: refetchUser,
-  } = useQuery<UserWithProfile | null>({
-    queryKey: ["/api/user", forceRefresh],
-    queryFn: async () => {
-      try {
-        const res = await fetch("/api/user", { 
-          credentials: "include",
-          headers: {
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache"
-          }
-        });
-        if (res.status === 401) return null;
-        if (!res.ok) throw new Error(await res.text());
-        return await res.json();
-      } catch (err) {
-        console.error("Error fetching user:", err);
-        return null;
-      }
-    },
-    staleTime: 0,
-    retry: false,
-    refetchOnWindowFocus: true,
-    refetchOnMount: true,
-    refetchOnReconnect: true,
-  });
+  // Listen for Firebase Auth state changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      setUser(firebaseUser);
+      setIsLoading(false); // Set loading to false after checking auth state
+    });
 
-  // Force refetch helper
-  const triggerRefetch = () => {
-    setForceRefresh(prev => prev + 1);
-    refetchUser();
-  };
+    // Cleanup the subscription on unmount
+    return () => unsubscribe();
+  }, []); // Empty dependency array ensures this effect runs only once on mount
 
-  // Login mutation
-  const loginMutation = useMutation({
-    mutationFn: async (credentials: LoginData) => {
-      const res = await apiRequest("POST", "/api/login", credentials);
-      return await res.json();
-    },
-    onSuccess: (user: UserWithProfile) => {
-      // Update cache with new user data
-      queryClient.setQueryData(["/api/user", forceRefresh], user);
-      
-      // Force refetch to ensure UI updates
-      triggerRefetch();
-      
-      toast({
-        title: "Login successful",
-        description: "Welcome back!",
-      });
-      
-      // Navigate to home page
-      setTimeout(() => navigate("/"), 100);
-    },
-    onError: (error: Error) => {
-      toast({
-        title: "Login failed",
-        description: error.message,
-        variant: "destructive",
-      });
-    },
-  });
+  // Effect to handle auth redirects
+  useEffect(() => {
+    // If user is logged in and on the auth page, redirect to home
+    if (user && location.pathname === "/auth") {
+      navigate("/");
+    }
+    // If user is not logged in and on a protected route (not auth), redirect to auth
+    // You might need a more sophisticated way to define protected routes
+    // For simplicity, this example redirects if not on /auth and not logged in
+    if (!user && location.pathname !== "/auth" && !isLoading) {
+        // Only redirect if not loading and not already on the auth page
+        navigate("/auth");
+    }
+  }, [user, location.pathname, navigate, isLoading]); // Added isLoading to dependencies
 
-  // Register mutation
-  const registerMutation = useMutation({
-    mutationFn: async (credentials: InsertUser) => {
-      const res = await apiRequest("POST", "/api/register", credentials);
-      return await res.json();
-    },
-    onSuccess: (user: UserWithProfile) => {
-      // Update cache with new user data
-      queryClient.setQueryData(["/api/user", forceRefresh], user);
-      
-      // Force refetch to ensure UI updates
-      triggerRefetch();
-      
-      toast({
-        title: "Registration successful",
-        description: "Your account has been created!",
-      });
-      
-      // Navigate to home page
-      setTimeout(() => navigate("/"), 100);
-    },
-    onError: (error: Error) => {
-      toast({
-        title: "Registration failed",
-        description: error.message,
-        variant: "destructive",
-      });
-    },
-  });
-
-  // Logout mutation
-  const logoutMutation = useMutation({
-    mutationFn: async () => {
-      await apiRequest("POST", "/api/logout");
-    },
-    onSuccess: () => {
-      // Clear user data from cache
-      queryClient.setQueryData(["/api/user", forceRefresh], null);
-      
-      // Force refetch to ensure UI updates
-      triggerRefetch();
-      
+  // Logout function
+  const logout = async () => {
+    try {
+      await signOut(auth);
       toast({
         title: "Logged out",
         description: "You have been logged out successfully.",
       });
-      
-      // Navigate to auth page
-      setTimeout(() => navigate("/auth"), 100);
-    },
-    onError: (error: Error) => {
+      // onAuthStateChanged listener will set user to null and trigger the redirect
+    } catch (error: any) {
+      console.error("Firebase Logout error:", error);
       toast({
         title: "Logout failed",
-        description: error.message,
+        description: error.message || "Could not log out. Please try again.",
         variant: "destructive",
       });
-    },
-  });
-
-  // Effect to handle auth redirects
-  useEffect(() => {
-    if (user && location.pathname === "/auth") {
-      navigate("/");
     }
-  }, [user, location.pathname, navigate]);
+  };
 
   return (
     <AuthContext.Provider
       value={{
         user,
         isLoading,
-        error,
-        loginMutation,
-        logoutMutation,
-        registerMutation,
-        refetchUser: triggerRefetch,
+        logout, // Provide the logout function
       }}
     >
       {children}

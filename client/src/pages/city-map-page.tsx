@@ -1,566 +1,732 @@
-import { useState } from "react";
-import BottomNav from "@/components/bottom-nav";
-import { useAuth } from "@/hooks/use-auth";
-import { useQuery } from "@tanstack/react-query";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import BuildingCard from "@/components/building-card";
-import { Link } from "react-router-dom";
-import { motion } from "framer-motion";
+// client/src/pages/city-map-page.tsx
 
-interface Building {
-  id: number;
+import { useState, useEffect } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { motion } from "framer-motion";
+import { MapPin, ArrowLeft, Settings, Shop, Trophy, Home, DollarSign, Tag, Gift } from "lucide-react"; // Added Gift icon
+import { Button } from "@/components/ui/button";
+import BottomNav from "@/components/bottom-nav";
+import UserHeader from "@/components/user-header";
+import { useAuth } from "@/hooks/use-auth";
+import { useToast } from "@/hooks/use-toast"; // Import useToast
+
+
+// Import Firestore
+import { getFirestore, collection, getDocs, DocumentData, doc, getDoc, updateDoc, arrayRemove, runTransaction, Timestamp, onSnapshot, QuerySnapshot } from "firebase/firestore"; // Added arrayRemove and onSnapshot
+import { app } from "../firebaseConfig";
+
+// Get Firestore instance
+const db = getFirestore(app);
+
+// Define a type for building data fetched from Firestore
+interface BuildingData {
+  id: string; // Firestore document ID
   name: string;
   description: string;
-  owned: boolean;
-  dailyReward: number;
-  progress: number;
-  lessons: {
-    total: number;
-    completed: number;
-  };
-  quizzes: {
-    total: number;
-    remaining: number;
-  };
+  type: string; // 'lesson', 'shop', 'property', 'event', 'bank', etc.
+  position: { x: number; y: number }; // Assuming position is stored as a map
+  color?: string;
+  icon?: string;
+  width?: string;
+  height?: string;
+  shopItemId?: number | string;
+  dailyReward?: number; // Potential daily reward for some buildings (e.g., bank or owned properties)
+  cost?: number; // Cost to buy (for properties) or interact (for events/bank)
+  rent?: number; // Rent earned (for properties)
+  upkeep?: number; // Upkeep cost (for properties)
+  appreciationRate?: number; // Rate of value increase (for properties)
+  depreciationRate?: number; // Rate of value decrease (for properties)
+  currentValue?: number; // Dynamic current value (for properties)
+  ownerId?: string | null; // ID of the user who owns the property (null if not owned)
+  // Add other fields from your buildings collection as needed
 }
 
+// Define a type for user data fetched from Firestore
+interface UserData {
+  uid: string;
+  username: string;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+  xp: number;
+  coins: number;
+  streak: number;
+  ownedProperties: { [propertyId: string]: { purchasePrice: number, purchaseTimestamp: any } }; // Storing details about owned properties
+  achievements: string[];
+  completedLessons: string[];
+  ownedItems: string[];
+  createdAt: any;
+  lastDailyRewardCollection?: Timestamp; // Added field to track last reward collection time
+}
+
+
 export default function CityMapPage() {
-  const { user } = useAuth();
-  const [selectedBuilding, setSelectedBuilding] = useState<Building | null>(null);
-  const [mapView, setMapView] = useState<'normal' | '3d'>('normal');
-  const [zoomLevel, setZoomLevel] = useState<number>(1);
-  const [showControls, setShowControls] = useState<boolean>(false);
-  const [dailyRewardCollected, setDailyRewardCollected] = useState<boolean>(false);
-  
-  const { data: buildings } = useQuery({
-    queryKey: ['/api/buildings'],
-  });
+  const navigate = useNavigate();
+  const { user, isLoading: isAuthLoading } = useAuth(); // Get user and auth loading state
+  const { toast } = useToast(); // Get toast function
 
-  const handleBuildingClick = (building: Building) => {
+  const [buildings, setBuildings] = useState<BuildingData[]>([] as BuildingData[]);
+  const [isFetchingBuildings, setIsFetchingBuildings] = useState(true); // Keep loading state for initial fetch
+  const [selectedBuilding, setSelectedBuilding] = useState<BuildingData | null>(null);
+  const [currentUserData, setCurrentUserData] = useState<UserData | null>(null);
+  const [isFetchingUserData, setIsFetchingUserData] = useState(true); // Keep loading state for initial fetch
+  const [isProcessingAction, setIsProcessingAction] = useState(false);
+  const [showDailyRewardButton, setShowDailyRewardButton] = useState(false); // State to show daily reward button
+
+
+  // --- Real-time listener for Buildings ---
+  useEffect(() => {
+    setIsFetchingBuildings(true); // Set loading true initially
+    const unsubscribe = onSnapshot(collection(db, "buildings"), (snapshot: QuerySnapshot<DocumentData>) => {
+      const buildingsList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data() as BuildingData
+      }));
+      setBuildings(buildingsList);
+      setIsFetchingBuildings(false); // Set loading false after data is received
+    }, (error) => {
+      console.error("Error fetching real-time buildings updates:", error);
+       toast({
+          title: "Error",
+          description: "Failed to get real-time building updates.",
+          variant: "destructive",
+        });
+      setIsFetchingBuildings(false); // Set loading false on error
+    });
+
+    // Unsubscribe from listener when the component unmounts
+    return () => unsubscribe();
+  }, []); // Empty dependency array means this sets up the listener once on mount
+
+
+  // --- Real-time listener for Current User Data and Daily Reward Check ---
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+
+    if (user) {
+      setIsFetchingUserData(true); // Set loading true initially
+      const userDocRef = doc(db, "users", user.uid);
+       unsubscribe = onSnapshot(userDocRef, (docSnap) => {
+         if (docSnap.exists()) {
+            const userData = docSnap.data() as UserData;
+            setCurrentUserData(userData);
+
+             // --- Daily Reward Check ---
+             const lastCollectionTimestamp = userData.lastDailyRewardCollection;
+             const now = Timestamp.now();
+             const twentyFourHoursInMillis = 24 * 60 * 60 * 1000; // Corrected variable name
+
+
+             // Check if last collection was more than 24 hours ago
+             if (!lastCollectionTimestamp || (now.toMillis() - lastCollectionTimestamp.toMillis()) >= twentyFourHoursInMillis) {
+                 // Check if the user owns any properties with a daily reward
+                 const ownedPropertyIds = Object.keys(userData.ownedProperties || {});
+                 const propertiesWithDailyReward = buildings.filter(b => ownedPropertyIds.includes(b.id) && (b.dailyReward ?? 0) > 0);
+
+                 if (propertiesWithDailyReward.length > 0) {
+                     setShowDailyRewardButton(true); // Show the daily reward button
+                 } else {
+                     setShowDailyRewardButton(false);
+                 }
+
+             } else {
+                 setShowDailyRewardButton(false); // Hide if not enough time has passed
+             }
+             // --- End Daily Reward Check ---
+
+
+         } else {
+            console.warn("No user document found in Firestore for UID:", user.uid);
+            setCurrentUserData(null);
+            setShowDailyRewardButton(false); // Hide button if no user data
+            // Optionally, log out the user or redirect if their document is missing unexpectedly
+         }
+         setIsFetchingUserData(false); // Set loading false after data is received
+       }, (error) => {
+          console.error("Error fetching real-time user data updates:", error);
+           toast({
+            title: "Error",
+            description: "Failed to get real-time user data updates.",
+            variant: "destructive",
+          });
+         setIsFetchingUserData(false); // Set loading false on error
+         setShowDailyRewardButton(false); // Hide button on error
+       });
+    } else {
+       setCurrentUserData(null); // Clear user data if no user is logged in
+       setIsFetchingUserData(false); // Not loading user data if no user
+       setShowDailyRewardButton(false); // Hide button if no user
+    }
+
+    // Unsubscribe from listener when the user changes or component unmounts
+    return () => {
+       if (unsubscribe) {
+          unsubscribe();
+       }
+    };
+  }, [user, buildings]); // Rerun when the Firebase auth user object changes or buildings data changes (needed for reward check)
+
+
+  const handleBuildingClick = (building: BuildingData) => {
     setSelectedBuilding(building);
+    console.log("Building clicked:", building);
   };
 
-  const closePropertyInfo = () => {
-    setSelectedBuilding(null);
-  };
-  
-  const toggleMapView = () => {
-    setMapView(prev => prev === 'normal' ? '3d' : 'normal');
-  };
-  
-  const handleZoomIn = () => {
-    if (zoomLevel < 1.5) {
-      setZoomLevel(prev => prev + 0.1);
+  // Function to handle navigating to a lesson
+  const handleGoToLesson = async (lessonId: string) => {
+    if (!user) {
+      toast({
+        title: "Error",
+        description: "User not authenticated.",
+        variant: "destructive",
+      });
+      return;
     }
+    // Navigate to the lesson page
+    navigate(`/lesson/${lessonId}`);
+    // Lesson completion and reward logic will be on the lesson page
+    // or handled by a Cloud Function
   };
-  
-  const handleZoomOut = () => {
-    if (zoomLevel > 0.8) {
-      setZoomLevel(prev => prev - 0.1);
-    }
+
+  // Function to handle buying a property using a Firestore Transaction
+  const handleBuyProperty = async (property: BuildingData) => {
+      if (!user || !currentUserData) {
+          toast({
+              title: "Error",
+              description: "User not authenticated or user data not loaded.",
+              variant: "destructive",
+          });
+          return;
+      }
+
+      if (!property.cost || property.cost <= 0) {
+           toast({
+               title: "Error",
+               description: "This property cannot be purchased.",
+               variant: "destructive",
+           });
+           return;
+      }
+
+      if (currentUserData.coins < property.cost) {
+          toast({
+              title: "Not enough coins",
+              description: `You need ${property.cost - currentUserData.coins} more coins to buy this property.`,
+              variant: "destructive",
+          });
+          return;
+      }
+
+      if (property.ownerId) {
+          toast({
+              title: "Property Owned",
+              description: "This property is already owned by another player.",
+              variant: "default",
+          });
+          return;
+      }
+
+      setIsProcessingAction(true); // Disable buttons
+
+      const userDocRef = doc(db, "users", user.uid);
+      const propertyDocRef = doc(db, "buildings", property.id); // Reference to the property document
+
+      try {
+          await runTransaction(db, async (transaction) => {
+              const userDoc = await transaction.get(userDocRef);
+              const propertyDoc = await transaction.get(propertyDocRef);
+
+              if (!userDoc.exists()) {
+                  throw new Error("User document does not exist!");
+              }
+              if (!propertyDoc.exists()) {
+                   throw new Error("Property document does not exist!");
+              }
+
+              const currentCoins = userDoc.data().coins;
+              const ownedProperties = userDoc.data().ownedProperties || {};
+              const currentOwnerId = propertyDoc.data().ownerId;
+              const propertyCost = propertyDoc.data().cost; // Get cost from property doc in transaction
+
+              // Re-check conditions within the transaction
+              if (currentCoins < propertyCost) {
+                  throw new Error("Not enough coins for purchase.");
+              }
+              if (currentOwnerId) {
+                  throw new Error("Property already owned.");
+              }
+
+              // Deduct coins from user
+              const newCoins = currentCoins - propertyCost;
+
+              // Add property to user's owned properties
+              const newOwnedProperties = {
+                  ...ownedProperties,
+                  [property.id]: {
+                      purchasePrice: propertyCost,
+                      purchaseTimestamp: Timestamp.now(),
+                      // Add other relevant details like upgrades, etc.
+                  }
+              };
+
+              transaction.update(userDocRef, {
+                  coins: newCoins,
+                  ownedProperties: newOwnedProperties,
+              });
+
+              // Update property document to set owner
+              transaction.update(propertyDocRef, {
+                  ownerId: user.uid,
+                  // Optionally update currentValue if you want it to reflect purchase price initially
+                  currentValue: propertyCost,
+              });
+          });
+
+          // If the transaction is successful
+          toast({
+              title: "Purchase successful",
+              description: `You are now the owner of ${property.name}!`,
+              variant: "default",
+          });
+
+          // Real-time listeners will update the state
+
+           setSelectedBuilding(null); // Close the modal
+
+
+      } catch (error: any) {
+          console.error("Firestore Transaction failed:", error);
+           let errorMessage = "Purchase failed. Please try again.";
+           if (error.message === "Not enough coins for purchase.") {
+               errorMessage = "Not enough coins for purchase.";
+           } else if (error.message === "Property already owned.") {
+                errorMessage = "This property is already owned.";
+           } else if (error.message === "User document does not exist!") {
+               errorMessage = "Your user data is missing. Please try logging in again.";
+           } else if (error.message === "Property document does not exist!") {
+                errorMessage = "This property no longer exists.";
+           }
+           else {
+              errorMessage = error.message; // Fallback to error message
+           }
+
+          toast({
+              title: "Purchase failed",
+              description: errorMessage,
+              variant: "destructive",
+          });
+      } finally {
+          setIsProcessingAction(false); // Re-enable buttons
+      }
   };
-  
-  const toggleControls = () => {
-    setShowControls(prev => !prev);
-  };
-  
-  const collectDailyRewards = () => {
-    // This would typically call an API to collect rewards
-    setDailyRewardCollected(true);
-    
-    // Show a toast or notification for feedback
-    // This is a placeholder for actual reward logic
-    setTimeout(() => {
-      setDailyRewardCollected(false);
-    }, 3000);
-  };
+
+
+    // Function to handle selling a property using a Firestore Transaction
+    const handleSellProperty = async (property: BuildingData) => {
+        if (!user || !currentUserData) {
+             toast({
+                 title: "Error",
+                 description: "User not authenticated or user data not loaded.",
+                 variant: "destructive",
+             });
+             return;
+         }
+
+        if (property.ownerId !== user.uid) {
+            toast({
+                title: "Not Your Property",
+                description: "You do not own this property.",
+                variant: "destructive",
+            });
+            return;
+        }
+
+         // Determine sale price (Example: Sell for 80% of purchase price)
+         // Using purchase price for simplicity here. Adjust logic as needed.
+         const purchaseDetails = currentUserData.ownedProperties?.[property.id];
+         if (!purchaseDetails) {
+              toast({
+                  title: "Error",
+                  description: "Could not find purchase details for this property.",
+                  variant: "destructive",
+              });
+              return;
+         }
+
+         const salePrice = Math.floor(purchaseDetails.purchasePrice * 0.8); // Example: Sell for 80% of purchase price
+
+
+        setIsProcessingAction(true); // Disable buttons
+
+        const userDocRef = doc(db, "users", user.uid);
+        const propertyDocRef = doc(db, "buildings", property.id); // Reference to the property document
+
+
+        try {
+            await runTransaction(db, async (transaction) => {
+                const userDoc = await transaction.get(userDocRef);
+                const propertyDoc = await transaction.get(propertyDocRef);
+
+                if (!userDoc.exists()) {
+                    throw new Error("User document does not exist!");
+                }
+                 if (!propertyDoc.exists()) {
+                     throw new Error("Property document does not exist!");
+                 }
+
+                const currentCoins = userDoc.data().coins;
+                const ownedProperties = userDoc.data().ownedProperties || {};
+                const currentOwnerId = propertyDoc.data().ownerId;
+
+                 // Re-check ownership within the transaction
+                 if (currentOwnerId !== user.uid) {
+                     throw new Error("You do not own this property.");
+                 }
+
+                 // Add coins from sale
+                const newCoins = currentCoins + salePrice;
+
+                // Remove property from user's owned properties
+                const newOwnedProperties = { ...ownedProperties };
+                delete newOwnedProperties[property.id]; // Remove the property by ID
+
+
+                transaction.update(userDocRef, {
+                    coins: newCoins,
+                    ownedProperties: newOwnedProperties,
+                });
+
+                // Update property document to set owner to null
+                transaction.update(propertyDocRef, {
+                    ownerId: null,
+                     // Optionally reset currentValue or other fields
+                     // currentValue: property.cost, // Reset to original cost or leave as is
+                });
+            });
+
+             // If the transaction is successful
+             toast({
+                 title: "Property Sold!",
+                 description: `You sold ${property.name} for ${salePrice} coins.`,
+                 variant: "default",
+             });
+
+             // Real-time listeners will update the state
+
+            setSelectedBuilding(null); // Close the modal
+
+
+        } catch (error: any) {
+            console.error("Firestore Transaction failed during sell:", error);
+            let errorMessage = "Failed to sell property. Please try again.";
+             if (error.message === "You do not own this property.") {
+                 errorMessage = "You do not own this property.";
+             } else if (error.message === "User document does not exist!") {
+                 errorMessage = "Your user data is missing. Please try logging in again.";
+             } else if (error.message === "Property document does not exist!") {
+                 errorMessage = "This property no longer exists.";
+             }
+            else {
+               errorMessage = error.message; // Fallback to error message
+            }
+
+             toast({
+                 title: "Sale Failed",
+                 description: errorMessage,
+                 variant: "destructive",
+             });
+        } finally {
+            setIsProcessingAction(false); // Re-enable actions
+        }
+    };
+
+    // Function to collect daily rewards from owned properties
+    const collectDailyRewards = async () => {
+        if (!user || !currentUserData) {
+             toast({
+                 title: "Error",
+                 description: "User not authenticated or user data not loaded.",
+                 variant: "destructive",
+             });
+             return;
+         }
+
+         setIsProcessingAction(true); // Disable actions
+
+         const userDocRef = doc(db, "users", user.uid);
+
+         try {
+             await runTransaction(db, async (transaction) => {
+                 const userDoc = await transaction.get(userDocRef);
+
+                 if (!userDoc.exists()) {
+                     throw new Error("User document does not exist!");
+                 }
+
+                 const userDataInTransaction = userDoc.data() as UserData;
+                 const lastCollectionTimestamp = userDataInTransaction.lastDailyRewardCollection;
+                 const now = Timestamp.now();
+                 const twentyFourHoursInMillis = 24 * 60 * 60 * 1000;
+
+
+                 // Re-check within the transaction if rewards are collectable
+                if (lastCollectionTimestamp && (now.toMillis() - lastCollectionTimestamp.toMillis()) < twentyFourHoursInMillis) {
+                    console.warn("Daily rewards already collected within the last 24 hours.");
+                     toast({
+                         title: "Already Collected",
+                         description: "Daily rewards can only be collected once every 24 hours.",
+                         variant: "default", // Or a different variant
+                     });
+                    return; // Abort transaction without error
+                }
+
+
+                 const ownedPropertyIds = Object.keys(userDataInTransaction.ownedProperties || {});
+                 const ownedPropertiesWithRewards = buildings.filter(b => ownedPropertyIds.includes(b.id) && (b.dailyReward ?? 0) > 0);
+
+                 if (ownedPropertiesWithRewards.length === 0) {
+                     console.warn("No owned properties with daily rewards.");
+                      toast({
+                         title: "No Rewards Available",
+                         description: "You don't own any properties that provide daily rewards.",
+                         variant: "default",
+                      });
+                     return; // Abort transaction without error
+                 }
+
+
+                 // Calculate total daily reward
+                 const totalDailyReward = ownedPropertiesWithRewards.reduce((sum, prop) => sum + (prop.dailyReward ?? 0), 0);
+
+                 if (totalDailyReward <= 0) {
+                      console.warn("Calculated daily reward is zero or negative.");
+                       toast({
+                         title: "No Rewards Available",
+                         description: "No daily rewards to collect at this time.",
+                         variant: "default",
+                      });
+                     return; // Abort transaction without error
+                 }
+
+
+                 // Add reward coins to user
+                 const newCoins = userDataInTransaction.coins + totalDailyReward;
+
+                 // Update user document with new coins and last collection timestamp
+                 transaction.update(userDocRef, {
+                     coins: newCoins,
+                     lastDailyRewardCollection: now, // Update with current timestamp
+                 });
+             });
+
+             // If the transaction is successful
+              toast({
+                  title: "Daily Reward Collected!",
+                  description: `You collected ${totalDailyReward} coins from your properties.`,
+                  variant: "default",
+              });
+
+              // Real-time listeners will update the state
+              setShowDailyRewardButton(false); // Hide the button after successful collection
+
+
+         } catch (error: any) {
+             console.error("Firestore Transaction failed during reward collection:", error);
+             let errorMessage = "Failed to collect daily rewards. Please try again.";
+              if (error.message === "User document does not exist!") {
+                 errorMessage = "Your user data is missing. Please try logging in again.";
+              } else if (error.message === "Daily rewards already collected within the last 24 hours.") {
+                 errorMessage = "Daily rewards can only be collected once every 24 hours.";
+              } else if (error.message === "No owned properties with daily rewards.") {
+                 errorMessage = "You don't own any properties that provide daily rewards.";
+              } else if (error.message === "Calculated daily reward is zero or negative.") {
+                  errorMessage = "No daily rewards to collect at this time.";
+              }
+             else {
+                errorMessage = error.message; // Fallback to error message
+             }
+
+              toast({
+                  title: "Collection Failed",
+                  description: errorMessage,
+                  variant: "destructive",
+              });
+         } finally {
+             setIsProcessingAction(false); // Re-enable actions
+         }
+    };
+
+
+  // Show loading state
+  if (isAuthLoading || isFetchingBuildings || isFetchingUserData) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        Loading City Map...
+      </div>
+    );
+  }
+
+  // Redirect if no user is logged in
+  if (!user) {
+     return null; // useAuth hook handles redirect
+  }
+
 
   return (
-    <>
-      <main className="flex-1 overflow-auto pb-20">
-        <div className="p-4 pt-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold">Your FinCity</h2>
-            <div className="flex items-center">
-              <span className="flex items-center text-amber-500 bg-amber-50 px-3 py-1 rounded-full text-sm mr-2">
-                <i className="ri-coin-fill mr-1"></i> <span>{user?.coins || 0}</span>
-              </span>
-              <button 
-                className="w-9 h-9 rounded-full bg-light flex items-center justify-center mr-2 relative"
-                onClick={collectDailyRewards}
-                disabled={dailyRewardCollected}
-              >
-                <i className={`ri-money-dollar-circle-line text-dark/60 ${dailyRewardCollected ? '' : 'animate-pulse-soft'}`}></i>
-                {!dailyRewardCollected && (
-                  <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full"></span>
-                )}
-              </button>
-              <button 
-                className="w-9 h-9 rounded-full bg-light flex items-center justify-center mr-2"
-                onClick={toggleControls}
-              >
-                <i className="ri-settings-4-line text-dark/60"></i>
-              </button>
-              <button className="w-9 h-9 rounded-full bg-light flex items-center justify-center">
-                <i className="ri-information-line text-dark/60"></i>
-              </button>
-            </div>
-          </div>
-          
-          {/* City Map Container */}
-          <div className="rounded-xl overflow-hidden shadow-lg">
-            {/* City Map with zoom and 3D effects */}
-            <div 
-              className={`relative bg-gradient-to-b from-blue-100 to-blue-50 h-[500px] overflow-hidden transition-all duration-500 ${mapView === '3d' ? 'animate-tilt-3d' : ''}`}
-              style={{ 
-                transform: `scale(${zoomLevel})`,
-                transformOrigin: 'center center',
-              }}
+    <div className="min-h-screen flex flex-col bg-gray-100">
+      <UserHeader
+       username={currentUserData?.username || user.displayName || "FinCity Player"}
+       coins={currentUserData?.coins ?? 0}
+       xp={currentUserData?.xp ?? 0}
+       avatarUrl={user.photoURL || undefined}
+      />
+
+      {/* City Map Area */}
+      <div className="flex-1 relative p-4 overflow-auto" style={{ backgroundImage: 'url(/path/to/your/map-background.png)', backgroundSize: 'cover' }}>
+
+        {/* Daily Reward Button */}
+        {showDailyRewardButton && (
+            <motion.div
+                className="absolute top-4 right-4 z-10" // Position the button
+                 initial={{ opacity: 0, y: -20 }}
+                 animate={{ opacity: 1, y: 0 }}
+                 transition={{ duration: 0.5 }}
             >
-              {/* Sky with clouds */}
-              <div className="absolute inset-0">
-                {/* Animated clouds */}
-                <div className="absolute top-[10%] left-[-10%] w-20 h-8 bg-white/70 rounded-full blur-sm animate-[moveRight_40s_linear_infinite]"></div>
-                <div className="absolute top-[5%] left-[20%] w-32 h-10 bg-white/80 rounded-full blur-sm animate-[moveRight_60s_linear_infinite]"></div>
-                <div className="absolute top-[15%] right-[-5%] w-24 h-7 bg-white/60 rounded-full blur-sm animate-[moveLeft_50s_linear_infinite]"></div>
-                
-                {/* Sky gradient */}
-                <div className="absolute inset-0 bg-gradient-to-b from-blue-200 via-blue-100 to-transparent h-1/6 opacity-40"></div>
-                
-                {/* Ground areas */}
-                <div className="absolute bottom-0 left-0 right-0 h-1/3">
-                  {/* Park areas */}
-                  <div className="absolute bottom-0 left-[5%] right-[70%] top-[20%] bg-green-200 rounded-tl-3xl rounded-tr-lg"></div>
-                  <div className="absolute bottom-0 left-[60%] right-[5%] top-[30%] bg-green-200 rounded-tl-lg rounded-tr-3xl"></div>
-                  
-                  {/* Trees in parks */}
-                  <div className="absolute bottom-[5%] left-[10%] w-10 h-12">
-                    <div className="absolute bottom-0 left-[35%] w-3 h-6 bg-yellow-800 rounded-sm"></div>
-                    <div className="absolute bottom-[40%] left-0 right-0 h-8 bg-green-600 rounded-full"></div>
-                  </div>
-                  
-                  <div className="absolute bottom-[10%] left-[20%] w-8 h-10">
-                    <div className="absolute bottom-0 left-[35%] w-2 h-4 bg-yellow-800 rounded-sm"></div>
-                    <div className="absolute bottom-[30%] left-0 right-0 h-7 bg-green-600 rounded-full"></div>
-                  </div>
-                  
-                  <div className="absolute bottom-[7%] right-[25%] w-10 h-12">
-                    <div className="absolute bottom-0 left-[35%] w-3 h-6 bg-yellow-800 rounded-sm"></div>
-                    <div className="absolute bottom-[40%] left-0 right-0 h-8 bg-green-600 rounded-full"></div>
-                  </div>
-                  
-                  <div className="absolute bottom-[12%] right-[10%] w-8 h-10">
-                    <div className="absolute bottom-0 left-[35%] w-2 h-4 bg-yellow-800 rounded-sm"></div>
-                    <div className="absolute bottom-[30%] left-0 right-0 h-7 bg-green-600 rounded-full"></div>
-                  </div>
-                  
-                  {/* Lake */}
-                  <div className="absolute bottom-[15%] left-[38%] right-[38%] h-[20%] bg-blue-400 rounded-full">
-                    <div className="absolute inset-[10%] bg-blue-300 rounded-full opacity-70"></div>
-                    <div className="absolute top-[20%] left-[20%] w-[15%] h-[10%] bg-white/20 rounded-full animate-pulse"></div>
-                    <div className="absolute bottom-[25%] right-[30%] w-[10%] h-[8%] bg-white/20 rounded-full animate-pulse" style={{animationDelay: "0.5s"}}></div>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Interactive grid overlay for placement visualization */}
-              <div className="absolute inset-0 grid grid-cols-12 grid-rows-12 opacity-10 pointer-events-none">
-                {Array.from({length: 12}).map((_, rowIndex) => (
-                  Array.from({length: 12}).map((_, colIndex) => (
-                    <div key={`grid-${rowIndex}-${colIndex}`} className="border border-black/20"></div>
-                  ))
-                ))}
-              </div>
-              
-              {/* Roads network */}
-              <div className="absolute inset-0">
-                {/* Main horizontal roads */}
-                <div className="absolute top-[30%] left-0 right-0 h-10 bg-gray-600">
-                  {/* Road markings */}
-                  <div className="absolute top-[45%] left-0 right-0 h-1 bg-yellow-400 opacity-80">
-                    <div className="absolute top-0 left-0 right-0 h-full w-full flex items-center">
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="absolute top-[60%] left-0 right-0 h-10 bg-gray-600">
-                  {/* Road markings */}
-                  <div className="absolute top-[45%] left-0 right-0 h-1 bg-yellow-400 opacity-80">
-                    <div className="absolute top-0 left-0 right-0 h-full w-full flex items-center">
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                      <div className="w-6 h-[2px] bg-yellow-400 mr-3"></div>
-                    </div>
-                  </div>
-                </div>
-                
-                {/* Main vertical roads */}
-                <div className="absolute left-[30%] top-0 bottom-0 w-10 bg-gray-600">
-                  {/* Road markings */}
-                  <div className="absolute left-[45%] top-0 bottom-0 w-1 bg-yellow-400 opacity-80">
-                    <div className="absolute left-0 top-0 bottom-0 w-full h-full flex flex-col items-center justify-start">
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                    </div>
-                  </div>
-                </div>
-                
-                <div className="absolute left-[65%] top-0 bottom-0 w-10 bg-gray-600">
-                  {/* Road markings */}
-                  <div className="absolute left-[45%] top-0 bottom-0 w-1 bg-yellow-400 opacity-80">
-                    <div className="absolute left-0 top-0 bottom-0 w-full h-full flex flex-col items-center justify-start">
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                      <div className="h-6 w-[2px] bg-yellow-400 mb-3"></div>
-                    </div>
-                  </div>
-                </div>
-                
-                {/* Road intersections with animated cars */}
-                <div className="absolute top-[30%] left-[30%] w-10 h-10 bg-gray-700">
-                  {/* Animated car */}
-                  <div className="absolute w-4 h-2 bg-red-500 rounded-sm animate-[moveRight_10s_linear_infinite] top-2"></div>
-                </div>
-                
-                <div className="absolute top-[30%] left-[65%] w-10 h-10 bg-gray-700">
-                  {/* Animated car */}
-                  <div className="absolute w-4 h-2 bg-blue-500 rounded-sm animate-[moveLeft_8s_linear_infinite] bottom-2"></div>
-                </div>
-                
-                <div className="absolute top-[60%] left-[30%] w-10 h-10 bg-gray-700">
-                  {/* Animated car */}
-                  <div className="absolute w-2 h-4 bg-green-500 rounded-sm animate-[moveLeft_12s_linear_infinite] left-2"></div>
-                </div>
-                
-                <div className="absolute top-[60%] left-[65%] w-10 h-10 bg-gray-700">
-                  {/* Animated car */}
-                  <div className="absolute w-2 h-4 bg-yellow-500 rounded-sm animate-[moveRight_9s_linear_infinite] right-2"></div>
-                </div>
-              </div>
-              
-              {/* Map Buildings */}
-              <div className="absolute inset-0 p-4">
-                {buildings && Array.isArray(buildings) ? (
-                  buildings.map((building) => (
-                    <BuildingCard 
-                      key={building.id} 
-                      building={building} 
-                      onClick={() => handleBuildingClick(building)} 
-                    />
-                  ))
-                ) : (
-                  <>
-                    {/* Default Buildings */}
-                    <motion.div 
-                      className="map-building absolute top-[15%] left-[30%] w-20 h-28 cursor-pointer"
-                      onClick={() => handleBuildingClick({
-                        id: 1,
-                        name: "Bank",
-                        description: "Learn about payment methods, bank accounts, and how to manage cards.",
-                        owned: true,
-                        dailyReward: 10,
-                        progress: 65,
-                        lessons: {
-                          total: 3,
-                          completed: 2
-                        },
-                        quizzes: {
-                          total: 3,
-                          remaining: 1
-                        }
-                      })}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                    >
-                      <div className="bg-primary rounded-lg h-full w-full flex flex-col items-center justify-end p-2 shadow-lg">
-                        <div className="bg-primary-dark absolute top-0 left-0 right-0 h-4 rounded-t-lg"></div>
-                        <div className="absolute top-6 left-2 right-2 h-12 flex flex-col">
-                          <div className="h-2 bg-white/30 mb-1 rounded"></div>
-                          <div className="h-2 bg-white/30 mb-1 rounded"></div>
-                          <div className="h-2 bg-white/30 rounded"></div>
-                        </div>
-                        <i className="ri-bank-fill text-white text-xl mb-1"></i>
-                        <span className="text-white text-xs font-medium">Bank</span>
-                      </div>
-                    </motion.div>
-                    
-                    <motion.div 
-                      className="map-building absolute top-[20%] right-[30%] w-20 h-24 cursor-pointer"
-                      onClick={() => handleBuildingClick({
-                        id: 2,
-                        name: "Shop",
-                        description: "Learn about consumer choices and responsible spending.",
-                        owned: true,
-                        dailyReward: 8,
-                        progress: 30,
-                        lessons: {
-                          total: 4,
-                          completed: 1
-                        },
-                        quizzes: {
-                          total: 2,
-                          remaining: 1
-                        }
-                      })}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                    >
-                      <div className="bg-secondary rounded-lg h-full w-full flex flex-col items-center justify-end p-2 shadow-lg">
-                        <div className="absolute top-4 left-2 right-2 h-8 flex items-center justify-center">
-                          <i className="ri-store-2-fill text-white/70 text-2xl"></i>
-                        </div>
-                        <i className="ri-shopping-bag-fill text-white text-xl mb-1"></i>
-                        <span className="text-white text-xs font-medium">Shop</span>
-                      </div>
-                    </motion.div>
-                    
-                    <motion.div 
-                      className="map-building absolute bottom-[20%] left-[35%] w-20 h-20 cursor-pointer"
-                      onClick={() => handleBuildingClick({
-                        id: 3,
-                        name: "Savings",
-                        description: "Learn how to save money and plan for the future.",
-                        owned: true,
-                        dailyReward: 5,
-                        progress: 10,
-                        lessons: {
-                          total: 5,
-                          completed: 0
-                        },
-                        quizzes: {
-                          total: 2,
-                          remaining: 2
-                        }
-                      })}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                    >
-                      <div className="bg-accent rounded-lg h-full w-full flex flex-col items-center justify-end p-2 shadow-lg">
-                        <div className="absolute top-2 left-2 right-2 h-6 bg-white/20 rounded"></div>
-                        <i className="ri-safe-2-fill text-white text-xl mb-1"></i>
-                        <span className="text-white text-xs font-medium">Savings</span>
-                      </div>
-                    </motion.div>
-                    
-                    <motion.div 
-                      className="map-building absolute bottom-[25%] right-[32%] w-24 h-24 cursor-pointer"
-                      onClick={() => handleBuildingClick({
-                        id: 4,
-                        name: "School",
-                        description: "Learn financial education fundamentals.",
-                        owned: true,
-                        dailyReward: 12,
-                        progress: 80,
-                        lessons: {
-                          total: 3,
-                          completed: 2
-                        },
-                        quizzes: {
-                          total: 3,
-                          remaining: 1
-                        }
-                      })}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                    >
-                      <div className="bg-blue-500 rounded-lg h-full w-full flex flex-col items-center justify-end p-2 shadow-lg">
-                        <div className="absolute top-0 left-0 right-0 h-5 rounded-t-lg bg-blue-600"></div>
-                        <div className="absolute top-7 left-3 right-3 h-8 bg-white/30 rounded"></div>
-                        <i className="ri-book-open-fill text-white text-xl mb-1"></i>
-                        <span className="text-white text-xs font-medium">School</span>
-                      </div>
-                    </motion.div>
-                    
-                    <motion.div 
-                      className="map-building absolute top-[45%] left-[60%] w-20 h-20 opacity-60 cursor-pointer"
-                      onClick={() => handleBuildingClick({
-                        id: 5,
-                        name: "??? Building",
-                        description: "This building is locked. Earn more coins to unlock it.",
-                        owned: false,
-                        dailyReward: 15,
-                        progress: 0,
-                        lessons: {
-                          total: 0,
-                          completed: 0
-                        },
-                        quizzes: {
-                          total: 0,
-                          remaining: 0
-                        }
-                      })}
-                      whileHover={{ scale: 1.05 }}
-                      whileTap={{ scale: 0.95 }}
-                    >
-                      <div className="bg-gray-400 rounded-lg h-full w-full flex flex-col items-center justify-end p-2 shadow-lg">
-                        <div className="absolute top-0 left-0 right-0 bottom-0 flex items-center justify-center">
-                          <i className="ri-lock-fill text-white text-3xl"></i>
-                        </div>
-                        <span className="text-white text-xs font-medium">250 Coins</span>
-                      </div>
-                    </motion.div>
-                  </>
-                )}
-              </div>
-              
-              {/* Map Controls */}
-              {showControls && (
-                <motion.div 
-                  className="absolute top-4 right-4 bg-white/80 backdrop-blur-sm p-2 rounded-lg shadow-lg border border-gray-200 flex flex-col items-center"
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ duration: 0.3 }}
+                <Button
+                     onClick={collectDailyRewards}
+                     disabled={isProcessingAction}
+                     className="bg-green-500 hover:bg-green-600 text-white shadow-lg"
                 >
-                  <button 
-                    className={`w-10 h-10 rounded-full flex items-center justify-center mb-2 ${mapView === '3d' ? 'bg-primary text-white' : 'bg-light text-dark/60'}`}
-                    onClick={toggleMapView}
-                    title={mapView === '3d' ? 'Switch to 2D View' : 'Switch to 3D View'}
-                  >
-                    <i className={mapView === '3d' ? 'ri-cube-line' : 'ri-landscape-line'}></i>
-                  </button>
-                  <button 
-                    className="w-10 h-10 rounded-full bg-light flex items-center justify-center mb-2 text-dark/60"
-                    onClick={handleZoomIn}
-                    disabled={zoomLevel >= 1.5}
-                    title="Zoom In"
-                  >
-                    <i className="ri-zoom-in-line"></i>
-                  </button>
-                  <button 
-                    className="w-10 h-10 rounded-full bg-light flex items-center justify-center text-dark/60"
-                    onClick={handleZoomOut}
-                    disabled={zoomLevel <= 0.8}
-                    title="Zoom Out"
-                  >
-                    <i className="ri-zoom-out-line"></i>
-                  </button>
-                </motion.div>
+                    <Gift size={20} className="mr-2"/>
+                    {isProcessingAction ? 'Collecting...' : 'Collect Daily Reward'}
+                </Button>
+            </motion.div>
+        )}
+
+
+        {/* Render buildings from Firestore data */}
+        {buildings.map(building => (
+          <motion.div
+            key={building.id}
+            className={`absolute cursor-pointer p-2 rounded-lg shadow-md ${building.ownerId === user.uid ? 'border-2 border-primary' : building.ownerId ? 'border-2 border-yellow-400' : ''}`} // Indicate ownership
+            style={{
+              top: `${building.position.y}px`,
+              left: `${building.position.x}px`,
+              backgroundColor: building.color || '#3498db',
+              width: building.width || '50px',
+              height: building.height || '50px',
+            }}
+            onClick={() => handleBuildingClick(building)}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.95 }}
+          >
+             <div className="text-center text-white text-xs font-bold">
+               {/* Display icon or abbreviated name, maybe ownership status */}
+               {building.ownerId === user.uid ? 'Owned' : building.name}
+            </div>
+          </motion.div>
+        ))}
+
+      </div>
+
+      {/* Overlay or Modal for selected building details */}
+      {selectedBuilding && (
+        <motion.div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={() => setSelectedBuilding(null)}
+        >
+          <motion.div
+            className="bg-white rounded-lg p-6 max-w-sm w-full shadow-xl"
+            initial={{ y: -50, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 50, opacity: 0 }}
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 className="text-xl font-bold mb-2">{selectedBuilding.name}</h3>
+            <p className="text-gray-700 mb-4">{selectedBuilding.description}</p>
+
+             {/* Display property-specific details if applicable */}
+             {selectedBuilding.type === 'property' && (
+                 <div className="mb-4 text-gray-700">
+                     <div className="flex items-center mb-1">
+                         <DollarSign size={16} className="mr-2 text-green-600"/> Cost: {selectedBuilding.cost ?? 'N/A'} coins
+                     </div>
+                      <div className="flex items-center mb-1">
+                         <Home size={16} className="mr-2 text-blue-600"/> Rent: {selectedBuilding.rent ?? 'N/A'} coins
+                     </div>
+                       {/* Display current value if available */}
+                      {selectedBuilding.currentValue !== undefined && (
+                           <div className="flex items-center mb-1">
+                              <Tag size={16} className="mr-2 text-purple-600"/> Value: {selectedBuilding.currentValue} coins
+                           </div>
+                      )}
+                        {/* Display daily reward if available */}
+                       {selectedBuilding.dailyReward !== undefined && selectedBuilding.dailyReward > 0 && (
+                            <div className="flex items-center mb-1">
+                                <Gift size={16} className="mr-2 text-green-600"/> Daily Reward: {selectedBuilding.dailyReward} coins
+                            </div>
+                       )}
+                       {/* Display owner status */}
+                      {selectedBuilding.ownerId ? (
+                           <p className="text-yellow-700 font-semibold mt-2">Owned by {selectedBuilding.ownerId === user.uid ? 'You' : 'Another Player'}</p>
+                      ) : (
+                           <p className="text-green-700 font-semibold mt-2">Available for purchase</p>
+                      )}
+                 </div>
+             )}
+
+
+             {/* Actions based on building type */}
+             {selectedBuilding.type === 'lesson' && (
+                <Button className="w-full" onClick={() => handleGoToLesson(selectedBuilding.id)} disabled={isProcessingAction}>Go to Lesson</Button>
+             )}
+              {selectedBuilding.type === 'shop' && (
+                <Button className="w-full" onClick={() => navigate('/shop')} disabled={isProcessingAction}>Go to Shop</Button>
+             )}
+              {/* Buy Property Button */}
+             {selectedBuilding.type === 'property' && !selectedBuilding.ownerId && selectedBuilding.cost !== undefined && (
+                <Button
+                     className="w-full"
+                     onClick={() => handleBuyProperty(selectedBuilding)}
+                     disabled={isProcessingAction || (currentUserData?.coins ?? 0) < selectedBuilding.cost!} // Use non-null assertion as we checked above
+                 >
+                     {isProcessingAction ? 'Buying...' : `Buy Property (${selectedBuilding.cost} coins)`}
+                 </Button>
+             )}
+              {/* Sell Property Button */}
+              {selectedBuilding.type === 'property' && selectedBuilding.ownerId === user.uid && (
+                 <Button
+                      variant="outline"
+                      className="w-full mt-2 border-red-500 text-red-500 hover:bg-red-50" // Styled for selling
+                      onClick={() => handleSellProperty(selectedBuilding)}
+                      disabled={isProcessingAction}
+                   >
+                    {isProcessingAction ? 'Selling...' : 'Sell Property'}
+                 </Button>
               )}
 
-              {/* Coins earned notification */}
-              {dailyRewardCollected && (
-                <motion.div 
-                  className="absolute top-20 left-1/2 transform -translate-x-1/2 bg-white px-4 py-2 rounded-full shadow-lg border border-yellow-300 flex items-center"
-                  initial={{ opacity: 0, y: -20 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, y: -20 }}
-                >
-                  <i className="ri-coin-line text-yellow-500 mr-2"></i>
-                  <span className="text-yellow-600 font-medium">+35 coins collected!</span>
-                </motion.div>
+
+             {/* Add more actions based on building type (e.g., collect daily reward for owned properties) */}
+            {selectedBuilding.type === 'property' && selectedBuilding.ownerId === user.uid && (selectedBuilding.dailyReward ?? 0) > 0 && currentUserData?.lastDailyRewardCollection && (Timestamp.now().toMillis() - currentUserData.lastDailyRewardCollection.toMillis()) >= (24 * 60 * 60 * 1000) && ( // Show collect button if owned, has reward, and 24 hours passed
+                 <Button
+                      className="w-full mt-2 bg-green-500 hover:bg-green-600 text-white" // Styled for collection
+                      onClick={() => collectDailyRewards()} // Call the collect function
+                      disabled={isProcessingAction}
+                   >
+                    {isProcessingAction ? 'Collecting...' : `Collect Daily Reward (${selectedBuilding.dailyReward} coins)`}
+                 </Button>
               )}
-              
-              {/* Add Building Button */}
-              <div className="absolute bottom-4 right-4 flex flex-col items-center">
-                <Link to="/shop" className="bg-primary text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center mb-2">
-                  <i className="ri-add-line text-xl"></i>
-                </Link>
-                <motion.button 
-                  onClick={collectDailyRewards}
-                  className={`bg-secondary text-white w-12 h-12 rounded-full shadow-lg flex items-center justify-center ${dailyRewardCollected ? 'opacity-50' : ''}`}
-                  disabled={dailyRewardCollected}
-                  animate={dailyRewardCollected ? {} : { y: [0, -8, 0] }}
-                  transition={{ 
-                    duration: 2, 
-                    repeat: Infinity,
-                    ease: "easeInOut" 
-                  }}
-                >
-                  <i className="ri-money-dollar-circle-line text-xl"></i>
-                </motion.button>
-              </div>
-            </div>
-          </div>
-          
-          {/* Property Info (Would slide up when property is clicked) */}
-          {selectedBuilding && (
-            <motion.div 
-              className="fixed bottom-0 left-0 right-0 bg-white rounded-t-2xl shadow-lg max-w-md mx-auto z-50"
-              initial={{ y: '100%' }}
-              animate={{ y: 0 }}
-              transition={{ type: 'spring', damping: 25, stiffness: 300 }}
-            >
-              <div className="w-12 h-1 bg-gray-300 rounded-full mx-auto my-3" onClick={closePropertyInfo}></div>
-              <div className="p-5">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-bold">{selectedBuilding.name}</h3>
-                  <span className={`${selectedBuilding.owned ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'} text-xs px-2 py-1 rounded-full`}>
-                    {selectedBuilding.owned ? 'Owned' : 'Available'}
-                  </span>
-                </div>
-                
-                <p className="text-dark/70 mb-4">{selectedBuilding.description}</p>
-                
-                <div className="flex justify-between items-center mb-4">
-                  <div>
-                    <h4 className="text-sm font-medium mb-1">Daily Reward</h4>
-                    <span className="flex items-center text-amber-500 text-sm">
-                      <i className="ri-coin-fill mr-1"></i> +{selectedBuilding.dailyReward} coins
-                    </span>
-                  </div>
-                  {selectedBuilding.owned ? (
-                    <Link to={`/lesson/${selectedBuilding.id}`} className="bg-primary text-white px-4 py-2 rounded-lg text-sm">Start Lesson</Link>
-                  ) : (
-                    <Button className="bg-secondary text-white px-4 py-2 rounded-lg text-sm">Buy for 250 coins</Button>
-                  )}
-                </div>
-                
-                {selectedBuilding.owned && (
-                  <div className="bg-blue-50 rounded-lg p-3">
-                    <h4 className="text-sm font-medium mb-2">Your Progress</h4>
-                    <div className="flex items-center">
-                      <Progress value={selectedBuilding.progress} className="w-full h-2 mr-3" />
-                      <span className="text-xs whitespace-nowrap">{selectedBuilding.progress}%</span>
-                    </div>
-                    <div className="flex justify-between text-xs mt-2 text-dark/70">
-                      <span>{selectedBuilding.lessons.completed}/{selectedBuilding.lessons.total} lessons completed</span>
-                      <span>{selectedBuilding.quizzes.remaining} quiz remaining</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </motion.div>
-          )}
-        </div>
-      </main>
-      <BottomNav active="city-map" />
-    </>
+
+
+            <Button variant="outline" className="w-full mt-2" onClick={() => setSelectedBuilding(null)} disabled={isProcessingAction}>Close</Button>
+          </motion.div>
+        </motion.div>
+      )}
+
+      <BottomNav active="map" />
+    </div>
   );
 }

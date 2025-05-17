@@ -1,3 +1,5 @@
+// client/src/pages/auth-page.tsx
+
 import { useState, useEffect } from "react";
 import { z } from "zod";
 import { useForm } from "react-hook-form";
@@ -7,19 +9,29 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "@/hooks/use-toast";
-import { insertUserSchema, UserWithProfile } from "@shared/schema";
+// We will no longer rely on insertUserSchema or UserWithProfile from @shared/schema for auth flow
+// import { insertUserSchema, UserWithProfile } from "@shared/schema";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Eye, EyeOff, User, Lock, Mail, AlertCircle, ExternalLink, CheckCircle2 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth } from "@/hooks/use-auth"; // Assuming useAuth will be updated to use Firebase auth state
 
-// Enhanced login schema with email/username support
+// Import Firebase Auth and Firestore
+import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, AuthError } from "firebase/auth";
+import { getFirestore, doc, setDoc, Timestamp } from "firebase/firestore";
+import { app } from "../firebaseConfig"; // Import the initialized Firebase app
+
+// Get Auth and Firestore instances
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+// Enhanced login schema with email validation
 const loginSchema = z.object({
-  identifier: z.string().min(3, "Username or email is required"),
+  identifier: z.string().email("Please enter a valid email address"), // Firebase Auth uses email for login
   password: z.string().min(8, "Password must be at least 8 characters"),
-  rememberMe: z.boolean().default(false),
+  rememberMe: z.boolean().default(false), // Remember me is handled by Firebase Auth persistence
 });
 
 // Enhanced register schema with additional fields
@@ -46,9 +58,9 @@ export default function AuthPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const navigate = useNavigate();
-  const { user } = useAuth();
-  
-  // Redirect if already logged in
+  const { user } = useAuth(); // Assuming useAuth hook will listen to Firebase Auth state
+
+  // Redirect if already logged in (relies on useAuth reflecting Firebase state)
   useEffect(() => {
     if (user) {
       navigate("/");
@@ -74,20 +86,20 @@ export default function AuthPage() {
     }
 
     let score = 0;
-    
+
     // Length check
     if (password.length >= 8) score += 1;
     if (password.length >= 12) score += 1;
-    
+
     // Character variety check
     if (/[A-Z]/.test(password)) score += 1;
     if (/[0-9]/.test(password)) score += 1;
     if (/[^A-Za-z0-9]/.test(password)) score += 1;
-    
+
     // Set message and color based on score
     let message = "";
     let color = "";
-    
+
     switch (true) {
       case (score <= 1):
         message = "Weak";
@@ -105,63 +117,118 @@ export default function AuthPage() {
         message = "Very Strong";
         color = "bg-green-600";
     }
-    
-    setPasswordStrength({score, message, color});
+
+    setPasswordStrength({ score, message, color });
   };
 
-  // Login mutation
-  const loginMutation = async (credentials: LoginValues) => {
+  // Login using Firebase Authentication
+  const onLoginSubmit = async (values: LoginValues) => {
     try {
-      const res = await fetch("/api/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: credentials.identifier,
-          password: credentials.password
-        }),
-        credentials: "include"
+      // Use identifier as email for Firebase Auth
+      await signInWithEmailAndPassword(auth, values.identifier, values.password);
+
+      // On successful login, Firebase Auth state will update,
+      // and the useAuth hook (once updated) should handle the redirect.
+      toast({
+        title: "Login successful",
+        description: "Welcome back to FinCity!",
+        variant: "default",
       });
-      
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(errorText || "Login failed");
+      // The useEffect above watching the 'user' state will handle navigation to "/"
+    } catch (error: any) {
+      console.error("Firebase Login error:", error);
+      let errorMessage = "Login failed. Please try again.";
+
+      // Provide more specific feedback for common Firebase Auth errors
+      if (error instanceof AuthError) {
+        switch (error.code) {
+          case 'auth/invalid-email':
+            errorMessage = 'Invalid email address format.';
+            break;
+          case 'auth/user-disabled':
+            errorMessage = 'This user account has been disabled.';
+            break;
+          case 'auth/user-not-found':
+            errorMessage = 'No user found with this email.';
+            break;
+          case 'auth/wrong-password':
+            errorMessage = 'Incorrect password.';
+            break;
+          case 'auth/invalid-credential':
+             errorMessage = 'Invalid credentials.';
+             break;
+          default:
+            errorMessage = error.message; // Fallback to Firebase error message
+        }
       }
-      
-      return await res.json();
-    } catch (error) {
-      console.error("Login error:", error);
-      throw error;
+
+
+      toast({
+        title: "Login failed",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
-  // Register mutation
-  const registerMutation = async (userData: RegisterValues) => {
+  // Register using Firebase Authentication and create user document in Firestore
+  const onRegisterSubmit = async (values: RegisterValues) => {
     try {
-      // Only send the fields that the backend expects
-      const payload = {
-        username: userData.username,
-        email: userData.email,
-        password: userData.password,
-        firstName: userData.firstName,
-        lastName: userData.lastName,
-      };
-      
-      const res = await fetch("/api/register", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        credentials: "include"
+      const userCredential = await createUserWithEmailAndPassword(auth, values.email, values.password);
+      const user = userCredential.user;
+
+      // Create a user document in Firestore
+      await setDoc(doc(db, "users", user.uid), {
+        uid: user.uid,
+        username: values.username,
+        email: values.email, // Store email in Firestore as well
+        firstName: values.firstName || "",
+        lastName: values.lastName || "",
+        xp: 0,
+        coins: 500, // Initial coins
+        streak: 0,
+        ownedProperties: {}, // Initialize as empty map
+        achievements: [], // Initialize as empty array
+        completedLessons: [], // Initialize completed lessons array
+        ownedItems: [], // Initialize owned items array
+        createdAt: Timestamp.now(), // Use Firestore server timestamp
       });
-      
-      if (!res.ok) {
-        const errorText = await res.text();
-        throw new Error(errorText || "Registration failed");
+
+      toast({
+        title: "Registration successful",
+        description: "Your account has been created! Welcome to FinCity.",
+        variant: "default",
+      });
+      // The useEffect above watching the 'user' state will handle navigation to "/"
+    } catch (error: any) {
+      console.error("Firebase Registration error:", error);
+      let errorMessage = "Registration failed. Please try again.";
+
+       // Provide more specific feedback for common Firebase Auth errors
+       if (error instanceof AuthError) {
+        switch (error.code) {
+          case 'auth/email-already-in-use':
+            errorMessage = 'The email address is already in use by another account.';
+            break;
+          case 'auth/invalid-email':
+            errorMessage = 'Invalid email address format.';
+            break;
+          case 'auth/operation-not-allowed':
+             errorMessage = 'Email/password accounts are not enabled. Enable email/password in the Firebase console Auth settings.';
+             break;
+          case 'auth/weak-password':
+            errorMessage = 'Password is too weak. Please choose a stronger password.';
+            break;
+          default:
+            errorMessage = error.message; // Fallback to Firebase error message
+        }
       }
-      
-      return await res.json();
-    } catch (error) {
-      console.error("Registration error:", error);
-      throw error;
+
+      toast({
+        title: "Registration failed",
+        description: errorMessage,
+        variant: "destructive",
+      });
     }
   };
 
@@ -191,47 +258,10 @@ export default function AuthPage() {
 
   // Watch password to check strength
   const watchedPassword = registerForm.watch("password");
-  
+
   useEffect(() => {
     checkPasswordStrength(watchedPassword);
   }, [watchedPassword]);
-
-  // Form submission handlers
-  const onLoginSubmit = async (values: LoginValues) => {
-    try {
-      const user = await loginMutation(values);
-      toast({
-        title: "Login successful",
-        description: `Welcome back, ${user.username}!`,
-        variant: "default",
-      });
-      window.location.href = "/";
-    } catch (error) {
-      toast({
-        title: "Login failed",
-        description: error.message || "Invalid username or password",
-        variant: "destructive",
-      });
-    }
-  };
-
-  const onRegisterSubmit = async (values: RegisterValues) => {
-    try {
-      const user = await registerMutation(values);
-      toast({
-        title: "Registration successful",
-        description: "Your account has been created! Welcome to FinCity.",
-        variant: "default",
-      });
-      window.location.href = "/";
-    } catch (error) {
-      toast({
-        title: "Registration failed",
-        description: error.message || "Could not create your account. Please try again.",
-        variant: "destructive",
-      });
-    }
-  };
 
   return (
     <div className="min-h-screen flex flex-col md:flex-row">
@@ -239,7 +269,7 @@ export default function AuthPage() {
       <div className="w-full md:w-1/2 flex flex-col items-center justify-center p-6 bg-white">
         <div className="w-full max-w-md">
           <div className="text-center mb-8">
-            <motion.h1 
+            <motion.h1
               className="text-3xl font-bold text-primary mb-2"
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -247,7 +277,7 @@ export default function AuthPage() {
             >
               FinCity
             </motion.h1>
-            <motion.p 
+            <motion.p
               className="text-gray-600"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -256,13 +286,13 @@ export default function AuthPage() {
               Learn finances. Build your future.
             </motion.p>
           </div>
-          
+
           <Tabs defaultValue="login" value={activeTab} onValueChange={setActiveTab} className="w-full">
             <TabsList className="grid w-full grid-cols-2 mb-6">
               <TabsTrigger value="login">Log In</TabsTrigger>
               <TabsTrigger value="register">Sign Up</TabsTrigger>
             </TabsList>
-            
+
             <TabsContent value="login">
               <motion.div
                 initial={{ opacity: 0, x: -20 }}
@@ -271,7 +301,7 @@ export default function AuthPage() {
                 className="bg-white rounded-xl shadow-md p-6 mb-6"
               >
                 <h2 className="text-xl font-semibold mb-4">Welcome back</h2>
-                
+
                 <Form {...loginForm}>
                   <form onSubmit={loginForm.handleSubmit(onLoginSubmit)} className="space-y-4">
                     <FormField
@@ -279,24 +309,25 @@ export default function AuthPage() {
                       name="identifier"
                       render={({ field }) => (
                         <FormItem>
-                          <FormLabel className="text-sm font-medium">Email or Username</FormLabel>
+                          <FormLabel className="text-sm font-medium">Email Address</FormLabel> {/* Updated Label */}
                           <div className="relative">
                             <FormControl>
-                              <Input 
-                                placeholder="Enter your email or username" 
+                              <Input
+                                placeholder="Enter your email address" // Updated Placeholder
                                 className="pl-10"
-                                {...field} 
+                                {...field}
+                                type="email" // Set input type to email
                               />
                             </FormControl>
                             <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
-                              <User size={16} />
+                              <Mail size={16} /> {/* Changed icon to Mail */}
                             </div>
                           </div>
                           <FormMessage />
                         </FormItem>
                       )}
                     />
-                    
+
                     <FormField
                       control={loginForm.control}
                       name="password"
@@ -305,17 +336,17 @@ export default function AuthPage() {
                           <FormLabel className="text-sm font-medium">Password</FormLabel>
                           <div className="relative">
                             <FormControl>
-                              <Input 
-                                type={showPassword ? "text" : "password"} 
-                                placeholder="Enter your password" 
+                              <Input
+                                type={showPassword ? "text" : "password"}
+                                placeholder="Enter your password"
                                 className="pl-10"
-                                {...field} 
+                                {...field}
                               />
                             </FormControl>
                             <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
                               <Lock size={16} />
                             </div>
-                            <button 
+                            <button
                               type="button"
                               className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                               onClick={() => setShowPassword(!showPassword)}
@@ -324,13 +355,16 @@ export default function AuthPage() {
                             </button>
                           </div>
                           <div className="flex justify-end">
-                            <button 
-                              type="button" 
+                            <button
+                              type="button"
                               className="text-xs text-primary hover:text-primary/80 mt-1"
-                              onClick={() => toast({
-                                title: "Password Reset",
-                                description: "This feature will be implemented soon!",
-                              })}
+                              onClick={() => {
+                                // TODO: Implement Firebase password reset
+                                toast({
+                                  title: "Password Reset",
+                                  description: "Password reset functionality will be implemented soon!",
+                                });
+                              }}
                             >
                               Forgot password?
                             </button>
@@ -339,7 +373,7 @@ export default function AuthPage() {
                         </FormItem>
                       )}
                     />
-                    
+
                     <FormField
                       control={loginForm.control}
                       name="rememberMe"
@@ -359,8 +393,8 @@ export default function AuthPage() {
                         </FormItem>
                       )}
                     />
-                    
-                    <Button 
+
+                    <Button
                       type="submit"
                       className="w-full bg-primary hover:bg-primary/90"
                     >
@@ -368,12 +402,12 @@ export default function AuthPage() {
                     </Button>
                   </form>
                 </Form>
-                
-                <div className="text-center">
+
+                <div className="text-center mt-6"> {/* Added margin top */}
                   <p className="text-sm text-gray-600">
                     Don't have an account?{" "}
-                    <button 
-                      type="button" 
+                    <button
+                      type="button"
                       className="text-primary font-medium"
                       onClick={() => setActiveTab("register")}
                     >
@@ -383,7 +417,7 @@ export default function AuthPage() {
                 </div>
               </motion.div>
             </TabsContent>
-            
+
             <TabsContent value="register">
               <motion.div
                 initial={{ opacity: 0, x: 20 }}
@@ -392,7 +426,7 @@ export default function AuthPage() {
                 className="bg-white rounded-xl shadow-md p-6 mb-6"
               >
                 <h2 className="text-xl font-semibold mb-4">Create your account</h2>
-                
+
                 <Form {...registerForm}>
                   <form onSubmit={registerForm.handleSubmit(onRegisterSubmit)} className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -401,11 +435,11 @@ export default function AuthPage() {
                         name="firstName"
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel className="text-sm font-medium">First Name</FormLabel>
+                            <FormLabel className="text-sm font-medium">First Name (Optional)</FormLabel> {/* Marked Optional */}
                             <FormControl>
-                              <Input 
-                                placeholder="Your first name" 
-                                {...field} 
+                              <Input
+                                placeholder="Your first name"
+                                {...field}
                                 value={field.value || ""}
                               />
                             </FormControl>
@@ -413,17 +447,17 @@ export default function AuthPage() {
                           </FormItem>
                         )}
                       />
-                      
+
                       <FormField
                         control={registerForm.control}
                         name="lastName"
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel className="text-sm font-medium">Last Name</FormLabel>
+                            <FormLabel className="text-sm font-medium">Last Name (Optional)</FormLabel> {/* Marked Optional */}
                             <FormControl>
-                              <Input 
-                                placeholder="Your last name" 
-                                {...field} 
+                              <Input
+                                placeholder="Your last name"
+                                {...field}
                                 value={field.value || ""}
                               />
                             </FormControl>
@@ -432,7 +466,7 @@ export default function AuthPage() {
                         )}
                       />
                     </div>
-                    
+
                     <FormField
                       control={registerForm.control}
                       name="username"
@@ -441,10 +475,10 @@ export default function AuthPage() {
                           <FormLabel className="text-sm font-medium">Username</FormLabel>
                           <div className="relative">
                             <FormControl>
-                              <Input 
-                                placeholder="Choose a username" 
+                              <Input
+                                placeholder="Choose a username"
                                 className="pl-10"
-                                {...field} 
+                                {...field}
                               />
                             </FormControl>
                             <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
@@ -458,7 +492,7 @@ export default function AuthPage() {
                         </FormItem>
                       )}
                     />
-                    
+
                     <FormField
                       control={registerForm.control}
                       name="email"
@@ -467,11 +501,11 @@ export default function AuthPage() {
                           <FormLabel className="text-sm font-medium">Email</FormLabel>
                           <div className="relative">
                             <FormControl>
-                              <Input 
-                                type="email" 
-                                placeholder="your.email@example.com" 
+                              <Input
+                                type="email"
+                                placeholder="your.email@example.com"
                                 className="pl-10"
-                                {...field} 
+                                {...field}
                               />
                             </FormControl>
                             <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
@@ -482,7 +516,7 @@ export default function AuthPage() {
                         </FormItem>
                       )}
                     />
-                    
+
                     <FormField
                       control={registerForm.control}
                       name="password"
@@ -491,11 +525,11 @@ export default function AuthPage() {
                           <FormLabel className="text-sm font-medium">Password</FormLabel>
                           <div className="relative">
                             <FormControl>
-                              <Input 
-                                type={showPassword ? "text" : "password"} 
-                                placeholder="Create a password" 
+                              <Input
+                                type={showPassword ? "text" : "password"}
+                                placeholder="Create a password"
                                 className="pl-10"
-                                {...field} 
+                                {...field}
                                 onChange={(e) => {
                                   field.onChange(e);
                                   checkPasswordStrength(e.target.value);
@@ -505,7 +539,7 @@ export default function AuthPage() {
                             <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
                               <Lock size={16} />
                             </div>
-                            <button 
+                            <button
                               type="button"
                               className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                               onClick={() => setShowPassword(!showPassword)}
@@ -518,30 +552,29 @@ export default function AuthPage() {
                             <div className="flex justify-between items-center mb-1">
                               <span className="text-xs text-gray-500">Password strength:</span>
                               <span className={`text-xs ${
-                                passwordStrength.message === "Strong" || passwordStrength.message === "Very Strong" 
-                                  ? "text-green-600" 
-                                  : passwordStrength.message === "Moderate" 
-                                    ? "text-yellow-600" 
+                                passwordStrength.message === "Strong" || passwordStrength.message === "Very Strong"
+                                  ? "text-green-600"
+                                  : passwordStrength.message === "Moderate"
+                                    ? "text-yellow-600"
                                     : "text-red-600"
                               }`}>
                                 {passwordStrength.message}
                               </span>
                             </div>
                             <div className="h-1 w-full bg-gray-200 rounded-full overflow-hidden">
-                              <div 
-                                className={`h-full ${passwordStrength.color}`} 
+                              <div
+                                className={`h-full ${passwordStrength.color}`}
                                 style={{ width: `${(passwordStrength.score / 5) * 100}%` }}
                               />
                             </div>
                           </div>
                           <FormDescription className="text-xs mt-1">
-                            Use 8+ characters with a mix of letters, numbers & symbols.
-                          </FormDescription>
+                            Use 8+ characters with a mix of letters, numbers & symbols.\n                          </FormDescription>
                           <FormMessage />
                         </FormItem>
                       )}
                     />
-                    
+
                     <FormField
                       control={registerForm.control}
                       name="confirmPassword"
@@ -550,17 +583,17 @@ export default function AuthPage() {
                           <FormLabel className="text-sm font-medium">Confirm Password</FormLabel>
                           <div className="relative">
                             <FormControl>
-                              <Input 
-                                type={showConfirmPassword ? "text" : "password"} 
-                                placeholder="Confirm your password" 
+                              <Input
+                                type={showConfirmPassword ? "text" : "password"}
+                                placeholder="Confirm your password"
                                 className="pl-10"
-                                {...field} 
+                                {...field}
                               />
                             </FormControl>
                             <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
                               <Lock size={16} />
                             </div>
-                            <button 
+                            <button
                               type="button"
                               className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                               onClick={() => setShowConfirmPassword(!showConfirmPassword)}
@@ -572,7 +605,7 @@ export default function AuthPage() {
                         </FormItem>
                       )}
                     />
-                    
+
                     <FormField
                       control={registerForm.control}
                       name="agreeToTerms"
@@ -587,8 +620,8 @@ export default function AuthPage() {
                           <div className="space-y-1 leading-none">
                             <FormLabel className="text-sm font-normal">
                               I agree to the{" "}
-                              <button 
-                                type="button" 
+                              <button
+                                type="button"
                                 className="text-primary hover:underline"
                                 onClick={() => toast({
                                   title: "Terms & Conditions",
@@ -598,8 +631,8 @@ export default function AuthPage() {
                                 Terms of Service
                               </button>{" "}
                               and{" "}
-                              <button 
-                                type="button" 
+                              <button
+                                type="button"
                                 className="text-primary hover:underline"
                                 onClick={() => toast({
                                   title: "Privacy Policy",
@@ -613,8 +646,8 @@ export default function AuthPage() {
                         </FormItem>
                       )}
                     />
-                    
-                    <Button 
+
+                    <Button
                       type="submit"
                       className="w-full bg-primary hover:bg-primary/90"
                     >
@@ -622,12 +655,266 @@ export default function AuthPage() {
                     </Button>
                   </form>
                 </Form>
-                
-                <div className="text-center">
+
+                <div className="text-center mt-6"> {/* Added margin top */}
                   <p className="text-sm text-gray-600">
                     Already have an account?{" "}
-                    <button 
-                      type="button" 
+                    <button
+                      type="button"
+                      className="text-primary font-medium"
+                      onClick={() => setActiveTab("login")}
+                    >
+                      Log in
+                    </button>
+                  </p>
+                </div>
+              </motion.div>
+            </TabsContent>
+
+            <TabsContent value="register">
+              <motion.div
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.3 }}
+                className="bg-white rounded-xl shadow-md p-6 mb-6"
+              >
+                <h2 className="text-xl font-semibold mb-4">Create your account</h2>
+
+                <Form {...registerForm}>
+                  <form onSubmit={registerForm.handleSubmit(onRegisterSubmit)} className="space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <FormField
+                        control={registerForm.control}
+                        name="firstName"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="text-sm font-medium">First Name (Optional)</FormLabel> {/* Marked Optional */}
+                            <FormControl>
+                              <Input
+                                placeholder="Your first name"
+                                {...field}
+                                value={field.value || ""}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={registerForm.control}
+                        name="lastName"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="text-sm font-medium">Last Name (Optional)</FormLabel> {/* Marked Optional */}
+                            <FormControl>
+                              <Input
+                                placeholder="Your last name"
+                                {...field}
+                                value={field.value || ""}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+
+                    <FormField
+                      control={registerForm.control}
+                      name="username"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-sm font-medium">Username</FormLabel>
+                          <div className="relative">
+                            <FormControl>
+                              <Input
+                                placeholder="Choose a username"
+                                className="pl-10"
+                                {...field}
+                              />
+                            </FormControl>
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                              <User size={16} />
+                            </div>
+                          </div>
+                          <FormDescription className="text-xs">
+                            This will be your unique identifier in the app.
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={registerForm.control}
+                      name="email"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-sm font-medium">Email</FormLabel>
+                          <div className="relative">
+                            <FormControl>
+                              <Input
+                                type="email"
+                                placeholder="your.email@example.com"
+                                className="pl-10"
+                                {...field}
+                              />
+                            </FormControl>
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                              <Mail size={16} />
+                            </div>
+                          </div>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={registerForm.control}
+                      name="password"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-sm font-medium">Password</FormLabel>
+                          <div className="relative">
+                            <FormControl>
+                              <Input
+                                type={showPassword ? "text" : "password"}
+                                placeholder="Create a password"
+                                className="pl-10"
+                                {...field}
+                                onChange={(e) => {
+                                  field.onChange(e);
+                                  checkPasswordStrength(e.target.value);
+                                }}
+                              />
+                            </FormControl>
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                              <Lock size={16} />
+                            </div>
+                            <button
+                              type="button"
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                              onClick={() => setShowPassword(!showPassword)}
+                            >
+                              {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                            </button>
+                          </div>
+                          {/* Password strength indicator */}
+                          <div className="mt-2">
+                            <div className="flex justify-between items-center mb-1">
+                              <span className="text-xs text-gray-500">Password strength:</span>
+                              <span className={`text-xs ${
+                                passwordStrength.message === "Strong" || passwordStrength.message === "Very Strong"
+                                  ? "text-green-600"
+                                  : passwordStrength.message === "Moderate"
+                                    ? "text-yellow-600"
+                                    : "text-red-600"
+                              }`}>
+                                {passwordStrength.message}
+                              </span>
+                            </div>
+                            <div className="h-1 w-full bg-gray-200 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full ${passwordStrength.color}`}
+                                style={{ width: `${(passwordStrength.score / 5) * 100}%` }}
+                              />
+                            </div>
+                          </div>
+                          <FormDescription className="text-xs mt-1">
+                            Use 8+ characters with a mix of letters, numbers & symbols.
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={registerForm.control}
+                      name="confirmPassword"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-sm font-medium">Confirm Password</FormLabel>
+                          <div className="relative">
+                            <FormControl>
+                              <Input
+                                type={showConfirmPassword ? "text" : "password"}
+                                placeholder="Confirm your password"
+                                className="pl-10"
+                                {...field}
+                              />
+                            </FormControl>
+                            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                              <Lock size={16} />
+                            </div>
+                            <button
+                              type="button"
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                            >
+                              {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                            </button>
+                          </div>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={registerForm.control}
+                      name="agreeToTerms"
+                      render={({ field }) => (
+                        <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md">
+                          <FormControl>
+                            <Checkbox
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                            />
+                          </FormControl>
+                          <div className="space-y-1 leading-none">
+                            <FormLabel className="text-sm font-normal">
+                              I agree to the{" "}
+                              <button
+                                type="button"
+                                className="text-primary hover:underline"
+                                onClick={() => toast({
+                                  title: "Terms & Conditions",
+                                  description: "This feature will be implemented soon!",
+                                })}
+                              >
+                                Terms of Service
+                              </button>{" "}
+                              and{" "}
+                              <button
+                                type="button"
+                                className="text-primary hover:underline"
+                                onClick={() => toast({
+                                  title: "Privacy Policy",
+                                  description: "This feature will be implemented soon!",
+                                })}
+                              >
+                                Privacy Policy
+                              </button>
+                            </FormLabel>
+                          </div>
+                        </FormItem>
+                      )}
+                    />
+
+                    <Button
+                      type="submit"
+                      className="w-full bg-primary hover:bg-primary/90"
+                    >
+                      Create Account
+                    </Button>
+                  </form>
+                </Form>
+
+                <div className="text-center mt-6"> {/* Added margin top */}
+                  <p className="text-sm text-gray-600">
+                    Already have an account?{" "}
+                    <button
+                      type="button"
                       className="text-primary font-medium"
                       onClick={() => setActiveTab("login")}
                     >
@@ -640,19 +927,19 @@ export default function AuthPage() {
           </Tabs>
         </div>
       </div>
-      
+
       {/* Right side - Hero Image/Information */}
       <div className="hidden md:block w-1/2 bg-gradient-to-br from-primary to-primary-dark text-white p-12 relative overflow-hidden">
-        <motion.div 
+        <motion.div
           className="absolute inset-0 bg-black/10 z-0"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 1 }}
         />
-        
+
         <div className="relative z-10 flex flex-col h-full">
           <div className="flex-1">
-            <motion.h2 
+            <motion.h2
               className="text-4xl font-bold mb-6"
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -660,8 +947,8 @@ export default function AuthPage() {
             >
               Start Your Financial Journey Today
             </motion.h2>
-            
-            <motion.p 
+
+            <motion.p
               className="text-xl mb-8 text-white/90"
               initial={{ opacity: 0, y: -20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -669,9 +956,9 @@ export default function AuthPage() {
             >
               Learn essential financial skills through interactive lessons and build your own virtual city!
             </motion.p>
-            
+
             <div className="space-y-6">
-              <motion.div 
+              <motion.div
                 className="flex items-start"
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -685,8 +972,8 @@ export default function AuthPage() {
                   <p className="text-white/80">Complete lessons and unlock special achievements</p>
                 </div>
               </motion.div>
-              
-              <motion.div 
+
+              <motion.div
                 className="flex items-start"
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -700,8 +987,8 @@ export default function AuthPage() {
                   <p className="text-white/80">Earn and spend coins while learning real financial skills</p>
                 </div>
               </motion.div>
-              
-              <motion.div 
+
+              <motion.div
                 className="flex items-start"
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -717,8 +1004,8 @@ export default function AuthPage() {
               </motion.div>
             </div>
           </div>
-          
-          <motion.div 
+
+          <motion.div
             className="mt-auto pt-8 border-t border-white/20"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -737,29 +1024,29 @@ export default function AuthPage() {
             </div>
           </motion.div>
         </div>
-        
+
         {/* Animated decorative elements */}
-        <motion.div 
+        <motion.div
           className="absolute top-24 right-12 w-32 h-32 rounded-full bg-white/10 backdrop-blur-sm"
-          animate={{ 
+          animate={{
             y: [0, 15, 0],
             scale: [1, 1.05, 1]
           }}
-          transition={{ 
-            duration: 5, 
+          transition={{
+            duration: 5,
             repeat: Infinity,
-            ease: "easeInOut" 
+            ease: "easeInOut"
           }}
         />
-        
-        <motion.div 
+
+        <motion.div
           className="absolute bottom-24 left-16 w-24 h-24 rounded-full bg-white/5 backdrop-blur-sm"
-          animate={{ 
+          animate={{
             y: [0, -15, 0],
             scale: [1, 1.03, 1]
           }}
-          transition={{ 
-            duration: 4, 
+          transition={{
+            duration: 4,
             repeat: Infinity,
             ease: "easeInOut",
             delay: 1
